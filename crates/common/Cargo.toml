@@ -10,6 +10,7 @@ publish = false
 alloy.workspace = true
 ssz_types.workspace = true
 ethereum_serde_utils.workspace = true
+openssl = { version = "0.10", optional = true, features = ["vendored"] }
 
 # networking
 axum.workspace = true
@@ -55,3 +56,6 @@ derive_more.workspace = true
 
 unicode-normalization.workspace = true
 base64.workspace = true
+
+[features]
+openssl-vendored = ["openssl/vendored"]

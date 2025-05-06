@@ -21,6 +21,9 @@ version = "0.7.0"
 rust-version = "1.83"
 edition = "2021"
 
+[workspace.features]
+openssl-vendored = ["crates/common/openssl-vendored"]
+
 [workspace.dependencies]
 cb-cli = { path = "crates/cli" }
 cb-common = { path = "crates/common" }
