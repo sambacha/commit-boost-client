@@ -123,8 +123,8 @@ impl PbsMuxes {
             }
 
             // Track registry muxes with refreshing enabled
-            if let Some(loader) = &mux.loader &&
-                let MuxKeysLoader::Registry { enable_refreshing: true, .. } = loader
+            if let Some(loader) = &mux.loader
+                && let MuxKeysLoader::Registry { enable_refreshing: true, .. } = loader
             {
                 info!(
                     "mux {} uses registry loader with dynamic refreshing enabled",

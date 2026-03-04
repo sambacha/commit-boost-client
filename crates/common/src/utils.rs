@@ -79,8 +79,8 @@ pub async fn read_chunked_body_with_max(
     }
 
     // Break if content length is provided but it's too big
-    if let Some(length) = content_length &&
-        length as usize > max_size
+    if let Some(length) = content_length
+        && length as usize > max_size
     {
         return Err(ResponseReadError::PayloadTooLarge {
             max: max_size,

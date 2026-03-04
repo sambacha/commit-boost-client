@@ -5,7 +5,10 @@ use cb_pbs::{DefaultBuilderApi, PbsService, PbsState};
 use cb_tests::{
     mock_relay::{MockRelayState, start_mock_relay_service},
     mock_validator::MockValidator,
-    utils::{generate_mock_relay, get_pbs_static_config, setup_test_env, to_pbs_config},
+    utils::{
+        assert_eventual_u64, generate_mock_relay, get_pbs_static_config, setup_test_env,
+        to_pbs_config,
+    },
 };
 use eyre::Result;
 use reqwest::StatusCode;
@@ -43,7 +46,7 @@ async fn test_get_status() -> Result<()> {
     assert_eq!(res.status(), StatusCode::OK);
 
     // Expect two statuses since two relays in config
-    assert_eq!(mock_state.received_get_status(), 2);
+    assert_eventual_u64(|| mock_state.received_get_status(), 2, Duration::from_millis(500)).await;
     Ok(())
 }
 

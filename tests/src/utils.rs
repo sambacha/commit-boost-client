@@ -2,12 +2,13 @@ use std::{
     collections::HashMap,
     net::{Ipv4Addr, SocketAddr},
     sync::{Arc, Once},
+    time::Duration,
 };
 
 use alloy::primitives::U256;
 use cb_common::{
     config::{
-        PbsConfig, PbsModuleConfig, RelayConfig, SIGNER_IMAGE_DEFAULT,
+        PbsConfig, PbsModuleConfig, RegistrationApi, RelayConfig, SIGNER_IMAGE_DEFAULT,
         SIGNER_JWT_AUTH_FAIL_LIMIT_DEFAULT, SIGNER_JWT_AUTH_FAIL_TIMEOUT_SECONDS_DEFAULT,
         SIGNER_PORT_DEFAULT, SignerConfig, SignerType, StartSignerConfig,
     },
@@ -31,6 +32,14 @@ pub fn setup_test_env() {
 }
 
 pub fn generate_mock_relay(port: u16, pubkey: BlsPublicKey) -> Result<RelayClient> {
+    generate_mock_relay_with_registration_api(port, pubkey, RegistrationApi::Auto)
+}
+
+pub fn generate_mock_relay_with_registration_api(
+    port: u16,
+    pubkey: BlsPublicKey,
+    registration_api: RegistrationApi,
+) -> Result<RelayClient> {
     let entry =
         RelayEntry { id: format!("mock_{port}"), pubkey, url: get_local_address(port).parse()? };
     let config = RelayConfig {
@@ -41,6 +50,7 @@ pub fn generate_mock_relay(port: u16, pubkey: BlsPublicKey) -> Result<RelayClien
         enable_timing_games: false,
         target_first_request_ms: None,
         frequency_get_header_ms: None,
+        registration_api,
         validator_registration_batch_size: None,
     };
     RelayClient::new(config)
@@ -61,6 +71,7 @@ pub fn generate_mock_relay_with_batch_size(
         enable_timing_games: false,
         target_first_request_ms: None,
         frequency_get_header_ms: None,
+        registration_api: RegistrationApi::Auto,
         validator_registration_batch_size: Some(batch_size),
     };
     RelayClient::new(config)
@@ -139,4 +150,25 @@ pub fn get_start_signer_config(
 
 pub fn bls_pubkey_from_hex_unchecked(hex: &str) -> BlsPublicKey {
     bls_pubkey_from_hex(hex).unwrap()
+}
+
+pub async fn assert_eventual_u64<F>(mut observed: F, expected: u64, timeout: Duration)
+where
+    F: FnMut() -> u64,
+{
+    let poll_interval = Duration::from_millis(10);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let current = observed();
+        if current == expected {
+            return;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            assert_eq!(current, expected);
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }

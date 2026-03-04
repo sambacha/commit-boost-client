@@ -1,10 +1,14 @@
 use alloy::{primitives::B256, rpc::types::beacon::relay::ValidatorRegistration};
 use cb_common::{
-    pbs::{BuilderApiVersion, RelayClient, SignedBlindedBeaconBlock},
+    pbs::{
+        BuilderApiVersion, RegisterValidatorContext, RegisterValidatorV2Request, RegistrationMode,
+        RelayClient, SignedBlindedBeaconBlock,
+    },
     types::BlsPublicKey,
     utils::bls_pubkey_from_hex,
 };
 use reqwest::Response;
+use uuid::Uuid;
 
 use crate::utils::generate_mock_relay;
 
@@ -42,9 +46,26 @@ impl MockValidator {
         &self,
         registrations: Vec<ValidatorRegistration>,
     ) -> eyre::Result<Response> {
-        let url = self.comm_boost.register_validator_url().unwrap();
+        let url = self.comm_boost.register_validator_url(BuilderApiVersion::V1).unwrap();
 
         Ok(self.comm_boost.client.post(url).json(&registrations).send().await?)
+    }
+
+    pub async fn do_register_custom_validators_v2(
+        &self,
+        registrations: Vec<ValidatorRegistration>,
+    ) -> eyre::Result<Response> {
+        let url = self.comm_boost.register_validator_url(BuilderApiVersion::V2).unwrap();
+        let body = RegisterValidatorV2Request {
+            registrations,
+            context: RegisterValidatorContext {
+                idempotency_key: Uuid::now_v7().to_string(),
+                source: Some("mock-validator".to_string()),
+                mode: RegistrationMode::All,
+            },
+        };
+
+        Ok(self.comm_boost.client.post(url).json(&body).send().await?)
     }
 
     pub async fn do_submit_block_v1(

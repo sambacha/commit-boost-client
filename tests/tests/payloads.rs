@@ -1,6 +1,9 @@
 use alloy::rpc::types::beacon::relay::ValidatorRegistration;
 use cb_common::{
-    pbs::{SignedBlindedBeaconBlock, SubmitBlindedBlockResponse},
+    pbs::{
+        RegisterValidatorContext, RegisterValidatorV2Request, RegistrationMode,
+        SignedBlindedBeaconBlock, SubmitBlindedBlockResponse,
+    },
     utils::test_encode_decode,
 };
 use serde_json::Value;
@@ -10,6 +13,22 @@ use serde_json::Value;
 fn test_registrations() {
     let data = include_str!("../data/registration_holesky.json");
     test_encode_decode::<Vec<ValidatorRegistration>>(data);
+}
+
+#[test]
+fn test_registration_v2_request() {
+    let data = include_str!("../data/registration_holesky.json");
+    let registrations = serde_json::from_str::<Vec<ValidatorRegistration>>(data).unwrap();
+    let v2 = RegisterValidatorV2Request {
+        registrations,
+        context: RegisterValidatorContext {
+            idempotency_key: "018f4b6e-4b88-7cc3-b22f-3b2ddf4f59df".to_string(),
+            source: Some("test-suite".to_string()),
+            mode: RegistrationMode::All,
+        },
+    };
+    let encoded = serde_json::to_string(&v2).unwrap();
+    test_encode_decode::<RegisterValidatorV2Request>(&encoded);
 }
 
 #[test]
@@ -30,9 +49,9 @@ fn test_missing_registration_field(field_name: &str) -> String {
     let mut values: Value = serde_json::from_str(data).unwrap();
 
     // Remove specified field from the first validator's message
-    if let Value::Array(arr) = &mut values &&
-        let Some(first_validator) = arr.get_mut(0) &&
-        let Some(Value::Object(msg_obj)) = first_validator.get_mut("message")
+    if let Value::Array(arr) = &mut values
+        && let Some(first_validator) = arr.get_mut(0)
+        && let Some(Value::Object(msg_obj)) = first_validator.get_mut("message")
     {
         msg_obj.remove(field_name);
     }

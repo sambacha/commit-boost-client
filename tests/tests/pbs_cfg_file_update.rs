@@ -2,7 +2,9 @@ use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use cb_common::{
-    config::{CommitBoostConfig, LogsSettings, PbsConfig, RelayConfig, StaticPbsConfig},
+    config::{
+        CommitBoostConfig, LogsSettings, PbsConfig, RegistrationApi, RelayConfig, StaticPbsConfig,
+    },
     pbs::RelayEntry,
     signer::random_secret,
     types::Chain,
@@ -85,6 +87,7 @@ async fn test_cfg_file_update() -> Result<()> {
             get_params: None,
             headers: None,
             target_first_request_ms: None,
+            registration_api: RegistrationApi::Auto,
             validator_registration_batch_size: None,
             entry: RelayEntry {
                 id: relay1.id.to_string(),
@@ -133,6 +136,7 @@ async fn test_cfg_file_update() -> Result<()> {
             get_params: None,
             headers: None,
             target_first_request_ms: None,
+            registration_api: RegistrationApi::Auto,
             validator_registration_batch_size: None,
             entry: RelayEntry {
                 id: relay2_id,

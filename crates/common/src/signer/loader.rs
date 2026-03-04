@@ -123,7 +123,7 @@ fn load_from_lighthouse_format(
         .into_par_iter()
         .filter_map(|path| {
             if !path.is_dir() {
-                return None
+                return None;
             }
 
             let maybe_pubkey = path.file_name().and_then(|d| d.to_str())?;
@@ -131,7 +131,7 @@ fn load_from_lighthouse_format(
                 Ok(pubkey) => pubkey,
                 Err(e) => {
                     warn!("Invalid pubkey: {}: {}", maybe_pubkey, e);
-                    return None
+                    return None;
                 }
             };
 
@@ -289,13 +289,13 @@ fn load_from_nimbus_format(
         .into_par_iter()
         .filter_map(|path| {
             if !path.is_dir() {
-                return None
+                return None;
             }
 
             let maybe_pubkey = path.file_name().and_then(|d| d.to_str())?;
             let Ok(pubkey) = bls_pubkey_from_hex(maybe_pubkey) else {
                 warn!("Invalid pubkey: {}", maybe_pubkey);
-                return None
+                return None;
             };
 
             let ks_path = keys_path.join(maybe_pubkey).join("keystore.json");
@@ -423,8 +423,8 @@ mod tests {
 
         assert_eq!(signers.len(), 1);
         assert!(
-            signers[0].pubkey() ==
-                bls_pubkey_from_hex_unchecked(
+            signers[0].pubkey()
+                == bls_pubkey_from_hex_unchecked(
                     "883827193f7627cd04e621e1e8d56498362a52b2a30c9a1c72036eb935c4278dee23d38a24d2f7dda62689886f0c39f4"
                 )
         );
@@ -440,8 +440,8 @@ mod tests {
 
         assert_eq!(signers.len(), 1);
         assert!(
-            signers[0].pubkey() ==
-                bls_pubkey_from_hex_unchecked(
+            signers[0].pubkey()
+                == bls_pubkey_from_hex_unchecked(
                     "b3a22e4a673ac7a153ab5b3c17a4dbef55f7e47210b20c0cbb0e66df5b36bb49ef808577610b034172e955d2312a61b9"
                 )
         );

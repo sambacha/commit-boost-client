@@ -21,8 +21,8 @@ use cb_tests::{
     mock_ssv_public::{PublicSsvMockState, TEST_HTTP_TIMEOUT, create_mock_public_ssv_server},
     mock_validator::MockValidator,
     utils::{
-        bls_pubkey_from_hex_unchecked, generate_mock_relay, get_pbs_static_config, setup_test_env,
-        to_pbs_config,
+        assert_eventual_u64, bls_pubkey_from_hex_unchecked, generate_mock_relay,
+        get_pbs_static_config, setup_test_env, to_pbs_config,
     },
 };
 use eyre::Result;
@@ -252,7 +252,7 @@ async fn test_mux() -> Result<()> {
     // Status requests should go to all relays
     info!("Sending get status");
     assert_eq!(mock_validator.do_get_status().await?.status(), StatusCode::OK);
-    assert_eq!(mock_state.received_get_status(), 3); // default + 2 mux relays were used
+    assert_eventual_u64(|| mock_state.received_get_status(), 3, Duration::from_millis(500)).await; // default + 2 mux relays were used
 
     // Register requests should go to all relays
     info!("Sending register validator");

@@ -92,6 +92,10 @@ headers = { X-MyCustomHeader = "MyCustomValue" }
 # GET parameters to add to each request URL for this relay
 # OPTIONAL
 get_params = { param1 = "value1", param2 = "value2" }
+# Which registration wire format to use when sending validator registrations to this relay.
+# `auto` tries `/eth/v2/builder/validators` first and falls back to v1 on 404.
+# OPTIONAL, DEFAULT: "auto"
+registration_api = "auto"
 # Whether to enable timing games, as tuned by `target_first_request_ms` and `frequency_get_header_ms`.
 # NOTE: if neither `target_first_request_ms` nor `frequency_get_header_ms` is set, this flag has no effect.
 #

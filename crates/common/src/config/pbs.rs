@@ -55,10 +55,26 @@ pub struct RelayConfig {
     pub target_first_request_ms: Option<u64>,
     /// Frequency in ms to send get_header requests
     pub frequency_get_header_ms: Option<u64>,
+    /// Which registration wire format should be used for this relay
+    #[serde(default = "default_registration_api")]
+    pub registration_api: RegistrationApi,
     /// Maximum number of validators to send to relays in one registration
     /// request
     #[serde(deserialize_with = "empty_string_as_none", default)]
     pub validator_registration_batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrationApi {
+    #[default]
+    Auto,
+    V1,
+    V2,
+}
+
+fn default_registration_api() -> RegistrationApi {
+    RegistrationApi::Auto
 }
 
 fn empty_string_as_none<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>

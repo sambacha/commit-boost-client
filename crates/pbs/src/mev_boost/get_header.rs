@@ -49,8 +49,8 @@ pub async fn get_header<S: BuilderApiState>(
     state: PbsState<S>,
 ) -> eyre::Result<Option<GetHeaderResponse>> {
     let parent_block = Arc::new(RwLock::new(None));
-    if state.extra_validation_enabled() &&
-        let Some(rpc_url) = state.pbs_config().rpc_url.clone()
+    if state.extra_validation_enabled()
+        && let Some(rpc_url) = state.pbs_config().rpc_url.clone()
     {
         tokio::spawn(
             fetch_parent_block(rpc_url, params.parent_hash, parent_block.clone()).in_current_span(),
@@ -252,7 +252,15 @@ async fn send_timed_get_header(
                                 None
                             }
                         }
-                        Err(err) if err.is_timeout() => None,
+                        Err(err) if err.is_timeout() => {
+                            RELAY_STATUS_CODE.with_label_values(&[
+                                TIMEOUT_ERROR_CODE_STR,
+                                GET_HEADER_ENDPOINT_TAG,
+                                &relay.id,
+                            ])
+                            .inc();
+                            None
+                        }
                         Err(err) => {
                             error!(relay_id = relay.id.as_ref(),%err, "TG: error sending header request");
                             None
@@ -384,11 +392,11 @@ async fn send_one_get_header(
     );
 
     match &get_header_response.data.message.header() {
-        ExecutionPayloadHeaderRef::Bellatrix(_) |
-        ExecutionPayloadHeaderRef::Capella(_) |
-        ExecutionPayloadHeaderRef::Deneb(_) |
-        ExecutionPayloadHeaderRef::Gloas(_) => {
-            return Err(PbsError::Validation(ValidationError::UnsupportedFork))
+        ExecutionPayloadHeaderRef::Bellatrix(_)
+        | ExecutionPayloadHeaderRef::Capella(_)
+        | ExecutionPayloadHeaderRef::Deneb(_)
+        | ExecutionPayloadHeaderRef::Gloas(_) => {
+            return Err(PbsError::Validation(ValidationError::UnsupportedFork));
         }
         ExecutionPayloadHeaderRef::Electra(res) => {
             let header_data = HeaderData {

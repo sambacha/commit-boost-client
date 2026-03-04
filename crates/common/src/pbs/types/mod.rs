@@ -1,4 +1,5 @@
 use alloy::primitives::{B256, U256, b256};
+use alloy::rpc::types::beacon::relay::ValidatorRegistration;
 use lh_types::{BlindedPayload, ExecPayload, MainnetEthSpec};
 pub use lh_types::{ForkName, ForkVersionedResponse};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,28 @@ pub type BuilderBidElectra = lh_types::builder_bid::BuilderBidElectra<MainnetEth
 pub type GetHeaderResponse = lh_types::ForkVersionedResponse<SignedBuilderBid>;
 
 pub type KzgCommitments = lh_types::beacon_block_body::KzgCommitments<MainnetEthSpec>;
+
+/// Request object of POST `/eth/v2/builder/validators`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RegisterValidatorV2Request {
+    pub registrations: Vec<ValidatorRegistration>,
+    pub context: RegisterValidatorContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisterValidatorContext {
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub mode: RegistrationMode,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrationMode {
+    Any,
+    All,
+}
 
 /// Response params of GET
 /// `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`

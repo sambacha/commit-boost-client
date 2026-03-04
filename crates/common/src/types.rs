@@ -434,13 +434,16 @@ mod tests {
     fn test_load_custom() {
         let s = r#"chain = { genesis_time_secs = 1, slot_time_secs = 2, genesis_fork_version = "0x01000000", fulu_fork_slot = 1, chain_id = 123 }"#;
         let decoded: MockConfig = toml::from_str(s).unwrap();
-        assert_eq!(decoded.chain, Chain::Custom {
-            genesis_time_secs: 1,
-            slot_time_secs: 2,
-            genesis_fork_version: [1, 0, 0, 0],
-            fulu_fork_slot: 1,
-            chain_id: 123,
-        })
+        assert_eq!(
+            decoded.chain,
+            Chain::Custom {
+                genesis_time_secs: 1,
+                slot_time_secs: 2,
+                genesis_fork_version: [1, 0, 0, 0],
+                fulu_fork_slot: 1,
+                chain_id: 123,
+            }
+        )
     }
 
     #[test]
@@ -477,13 +480,16 @@ mod tests {
 
         let decoded: MockConfig = toml::from_str(&s).unwrap();
         assert_eq!(decoded.chain.slot_time_sec(), KnownChain::Holesky.slot_time_sec());
-        assert_eq!(decoded.chain, Chain::Custom {
-            genesis_time_secs: 1,
-            slot_time_secs: KnownChain::Holesky.slot_time_sec(),
-            genesis_fork_version: KnownChain::Holesky.genesis_fork_version(),
-            fulu_fork_slot: KnownChain::Holesky.fulu_fork_slot(),
-            chain_id: KnownChain::Holesky.id(),
-        })
+        assert_eq!(
+            decoded.chain,
+            Chain::Custom {
+                genesis_time_secs: 1,
+                slot_time_secs: KnownChain::Holesky.slot_time_sec(),
+                genesis_fork_version: KnownChain::Holesky.genesis_fork_version(),
+                fulu_fork_slot: KnownChain::Holesky.fulu_fork_slot(),
+                chain_id: KnownChain::Holesky.id(),
+            }
+        )
     }
 
     #[test]
@@ -499,13 +505,16 @@ mod tests {
 
         let decoded: MockConfig = toml::from_str(&s).unwrap();
         assert_eq!(decoded.chain.slot_time_sec(), KnownChain::Sepolia.slot_time_sec());
-        assert_eq!(decoded.chain, Chain::Custom {
-            genesis_time_secs: 1,
-            slot_time_secs: KnownChain::Sepolia.slot_time_sec(),
-            genesis_fork_version: KnownChain::Sepolia.genesis_fork_version(),
-            fulu_fork_slot: KnownChain::Sepolia.fulu_fork_slot(),
-            chain_id: KnownChain::Sepolia.id(),
-        })
+        assert_eq!(
+            decoded.chain,
+            Chain::Custom {
+                genesis_time_secs: 1,
+                slot_time_secs: KnownChain::Sepolia.slot_time_sec(),
+                genesis_fork_version: KnownChain::Sepolia.genesis_fork_version(),
+                fulu_fork_slot: KnownChain::Sepolia.fulu_fork_slot(),
+                chain_id: KnownChain::Sepolia.id(),
+            }
+        )
     }
 
     #[test]
@@ -521,13 +530,16 @@ mod tests {
 
         let decoded: MockConfig = toml::from_str(&s).unwrap();
         assert_eq!(decoded.chain.slot_time_sec(), KnownChain::Hoodi.slot_time_sec());
-        assert_eq!(decoded.chain, Chain::Custom {
-            genesis_time_secs: 1,
-            slot_time_secs: KnownChain::Hoodi.slot_time_sec(),
-            genesis_fork_version: KnownChain::Hoodi.genesis_fork_version(),
-            fulu_fork_slot: KnownChain::Hoodi.fulu_fork_slot(),
-            chain_id: KnownChain::Hoodi.id(),
-        })
+        assert_eq!(
+            decoded.chain,
+            Chain::Custom {
+                genesis_time_secs: 1,
+                slot_time_secs: KnownChain::Hoodi.slot_time_sec(),
+                genesis_fork_version: KnownChain::Hoodi.genesis_fork_version(),
+                fulu_fork_slot: KnownChain::Hoodi.fulu_fork_slot(),
+                chain_id: KnownChain::Hoodi.id(),
+            }
+        )
     }
 
     #[test]
@@ -543,12 +555,15 @@ mod tests {
 
         let decoded: MockConfig = toml::from_str(&s).unwrap();
         assert_eq!(decoded.chain.slot_time_sec(), 12);
-        assert_eq!(decoded.chain, Chain::Custom {
-            genesis_time_secs: 1,
-            slot_time_secs: 12,
-            genesis_fork_version: hex!("0x10000038"),
-            fulu_fork_slot: 0,
-            chain_id: 3151908,
-        })
+        assert_eq!(
+            decoded.chain,
+            Chain::Custom {
+                genesis_time_secs: 1,
+                slot_time_secs: 12,
+                genesis_fork_version: hex!("0x10000038"),
+                fulu_fork_slot: 0,
+                chain_id: 3151908,
+            }
+        )
     }
 }

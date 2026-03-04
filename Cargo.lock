@@ -1741,6 +1741,7 @@ dependencies = [
  "tree_hash",
  "types",
  "url",
+ "uuid 1.18.1",
 ]
 
 [[package]]

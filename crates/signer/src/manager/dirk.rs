@@ -180,8 +180,8 @@ impl DirkManager {
                     .proxy_accounts
                     .values()
                     .filter_map(|proxy| {
-                        if proxy.module == *module &&
-                            proxy.consensus.public_key() == account.public_key()
+                        if proxy.module == *module
+                            && proxy.consensus.public_key() == account.public_key()
                         {
                             Some(proxy.inner.public_key().clone())
                         } else {
@@ -340,7 +340,7 @@ impl DirkManager {
             None => {
                 return Err(SignerModuleError::UnknownConsensusSigner(
                     consensus.serialize().to_vec(),
-                ))
+                ));
             }
         };
 
@@ -635,7 +635,7 @@ fn load_distributed_accounts(
                 "Skiping invalid participant ID (0) for account {} in host {host_name}",
                 account.name
             );
-            continue
+            continue;
         }
 
         match consensus_accounts.get_mut(&public_key) {
@@ -693,8 +693,8 @@ fn aggregate_partial_signatures(partials: &[(BlsSignature, u32)]) -> eyre::Resul
                 denominator *= Scalar::from(*other_id) - Scalar::from(*id);
             }
         }
-        let lagrange_coeff = numerator *
-            denominator
+        let lagrange_coeff = numerator
+            * denominator
                 .invert()
                 .into_option()
                 .ok_or_eyre("Failed to get lagrange coefficient")?;
@@ -721,8 +721,8 @@ fn random_password() -> String {
 ///
 /// i.e., `{wallet}/{consensus_proxy}/{module}/{uuid}`
 fn name_matches_proxy(name: &str) -> bool {
-    name.split("/").count() > 3 &&
-        name.rsplit_once("/").is_some_and(|(_, name)| uuid::Uuid::parse_str(name).is_ok())
+    name.split("/").count() > 3
+        && name.rsplit_once("/").is_some_and(|(_, name)| uuid::Uuid::parse_str(name).is_ok())
 }
 
 #[cfg(test)]

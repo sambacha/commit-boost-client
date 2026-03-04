@@ -19,8 +19,8 @@ use cb_common::{
         BUILDER_V1_API_PATH, BUILDER_V2_API_PATH, BlobsBundle, BuilderBid, BuilderBidElectra,
         ExecutionPayloadElectra, ExecutionPayloadHeaderElectra, ExecutionRequests, ForkName,
         GET_HEADER_PATH, GET_STATUS_PATH, GetHeaderParams, GetHeaderResponse, GetPayloadInfo,
-        PayloadAndBlobs, REGISTER_VALIDATOR_PATH, SUBMIT_BLOCK_PATH, SignedBlindedBeaconBlock,
-        SignedBuilderBid, SubmitBlindedBlockResponse,
+        PayloadAndBlobs, REGISTER_VALIDATOR_PATH, RegisterValidatorV2Request, SUBMIT_BLOCK_PATH,
+        SignedBlindedBeaconBlock, SignedBuilderBid, SubmitBlindedBlockResponse,
     },
     signature::sign_builder_root,
     types::{BlsSecretKey, Chain},
@@ -47,10 +47,15 @@ pub struct MockRelayState {
     pub signer: BlsSecretKey,
     large_body: bool,
     supports_submit_block_v2: bool,
+    supports_register_validator_v2: bool,
     use_not_found_for_submit_block: bool,
+    use_not_found_for_register_validator_v2: bool,
     received_get_header: Arc<AtomicU64>,
     received_get_status: Arc<AtomicU64>,
     received_register_validator: Arc<AtomicU64>,
+    received_register_validator_v1: Arc<AtomicU64>,
+    received_register_validator_v2: Arc<AtomicU64>,
+    register_validator_v2_idempotency_keys: Arc<RwLock<Vec<String>>>,
     received_submit_block: Arc<AtomicU64>,
     response_override: RwLock<Option<StatusCode>>,
 }
@@ -65,6 +70,15 @@ impl MockRelayState {
     pub fn received_register_validator(&self) -> u64 {
         self.received_register_validator.load(Ordering::Relaxed)
     }
+    pub fn received_register_validator_v1(&self) -> u64 {
+        self.received_register_validator_v1.load(Ordering::Relaxed)
+    }
+    pub fn received_register_validator_v2(&self) -> u64 {
+        self.received_register_validator_v2.load(Ordering::Relaxed)
+    }
+    pub fn register_validator_v2_idempotency_keys(&self) -> Vec<String> {
+        self.register_validator_v2_idempotency_keys.read().unwrap().clone()
+    }
     pub fn received_submit_block(&self) -> u64 {
         self.received_submit_block.load(Ordering::Relaxed)
     }
@@ -74,8 +88,14 @@ impl MockRelayState {
     pub fn supports_submit_block_v2(&self) -> bool {
         self.supports_submit_block_v2
     }
+    pub fn supports_register_validator_v2(&self) -> bool {
+        self.supports_register_validator_v2
+    }
     pub fn use_not_found_for_submit_block(&self) -> bool {
         self.use_not_found_for_submit_block
+    }
+    pub fn use_not_found_for_register_validator_v2(&self) -> bool {
+        self.use_not_found_for_register_validator_v2
     }
     pub fn set_response_override(&self, status: StatusCode) {
         *self.response_override.write().unwrap() = Some(status);
@@ -89,10 +109,15 @@ impl MockRelayState {
             signer,
             large_body: false,
             supports_submit_block_v2: true,
+            supports_register_validator_v2: true,
             use_not_found_for_submit_block: false,
+            use_not_found_for_register_validator_v2: false,
             received_get_header: Default::default(),
             received_get_status: Default::default(),
             received_register_validator: Default::default(),
+            received_register_validator_v1: Default::default(),
+            received_register_validator_v2: Default::default(),
+            register_validator_v2_idempotency_keys: Default::default(),
             received_submit_block: Default::default(),
             response_override: RwLock::new(None),
         }
@@ -106,8 +131,16 @@ impl MockRelayState {
         Self { supports_submit_block_v2: false, ..self }
     }
 
+    pub fn with_no_register_validator_v2(self) -> Self {
+        Self { supports_register_validator_v2: false, ..self }
+    }
+
     pub fn with_not_found_for_submit_block(self) -> Self {
         Self { use_not_found_for_submit_block: true, ..self }
+    }
+
+    pub fn with_not_found_for_register_validator_v2(self) -> Self {
+        Self { use_not_found_for_register_validator_v2: true, ..self }
     }
 }
 
@@ -115,14 +148,18 @@ pub fn mock_relay_app_router(state: Arc<MockRelayState>) -> Router {
     let v1_builder_routes = Router::new()
         .route(GET_HEADER_PATH, get(handle_get_header))
         .route(GET_STATUS_PATH, get(handle_get_status))
-        .route(REGISTER_VALIDATOR_PATH, post(handle_register_validator))
+        .route(REGISTER_VALIDATOR_PATH, post(handle_register_validator_v1))
         .route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v1));
 
-    let v2_builder_routes = if state.supports_submit_block_v2 {
-        Router::new().route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v2))
-    } else {
-        Router::new()
-    };
+    let mut v2_builder_routes = Router::new();
+    if state.supports_submit_block_v2 {
+        v2_builder_routes =
+            v2_builder_routes.route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v2));
+    }
+    if state.supports_register_validator_v2 {
+        v2_builder_routes =
+            v2_builder_routes.route(REGISTER_VALIDATOR_PATH, post(handle_register_validator_v2));
+    }
 
     let builder_router_v1 = Router::new().nest(BUILDER_V1_API_PATH, v1_builder_routes);
     let builder_router_v2 = Router::new().nest(BUILDER_V2_API_PATH, v2_builder_routes);
@@ -169,12 +206,37 @@ async fn handle_get_status(State(state): State<Arc<MockRelayState>>) -> impl Int
     StatusCode::OK
 }
 
-async fn handle_register_validator(
+async fn handle_register_validator_v1(
     State(state): State<Arc<MockRelayState>>,
     Json(validators): Json<Vec<ValidatorRegistration>>,
 ) -> impl IntoResponse {
     state.received_register_validator.fetch_add(1, Ordering::Relaxed);
+    state.received_register_validator_v1.fetch_add(1, Ordering::Relaxed);
     debug!("Received {} registrations", validators.len());
+
+    if let Some(status) = state.response_override.read().unwrap().as_ref() {
+        return (*status).into_response();
+    }
+
+    StatusCode::OK.into_response()
+}
+
+async fn handle_register_validator_v2(
+    State(state): State<Arc<MockRelayState>>,
+    Json(request): Json<RegisterValidatorV2Request>,
+) -> impl IntoResponse {
+    state.received_register_validator.fetch_add(1, Ordering::Relaxed);
+    state.received_register_validator_v2.fetch_add(1, Ordering::Relaxed);
+    state
+        .register_validator_v2_idempotency_keys
+        .write()
+        .unwrap()
+        .push(request.context.idempotency_key.clone());
+    debug!("Received {} registrations (v2)", request.registrations.len());
+
+    if state.use_not_found_for_register_validator_v2() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
 
     if let Some(status) = state.response_override.read().unwrap().as_ref() {
         return (*status).into_response();

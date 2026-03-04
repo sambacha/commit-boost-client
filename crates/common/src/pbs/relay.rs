@@ -124,8 +124,8 @@ impl RelayClient {
         self.builder_api_url(GET_STATUS_PATH, BuilderApiVersion::V1)
     }
 
-    pub fn register_validator_url(&self) -> Result<Url, PbsError> {
-        self.builder_api_url(REGISTER_VALIDATOR_PATH, BuilderApiVersion::V1)
+    pub fn register_validator_url(&self, api_version: BuilderApiVersion) -> Result<Url, PbsError> {
+        self.builder_api_url(REGISTER_VALIDATOR_PATH, api_version)
     }
 
     pub fn submit_block_url(&self, api_version: BuilderApiVersion) -> Result<Url, PbsError> {

@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use alloy::primitives::B256;
 use cb_common::{
-    config::RelayConfig,
+    config::{RegistrationApi, RelayConfig},
     pbs::{GetHeaderResponse, RelayClient, RelayEntry},
     types::{BlsPublicKey, BlsSecretKey, Chain},
     utils::TestRandomSeed,
@@ -160,6 +160,7 @@ fn get_mock_validator(bench: BenchConfig) -> RelayClient {
         enable_timing_games: false,
         target_first_request_ms: None,
         frequency_get_header_ms: None,
+        registration_api: RegistrationApi::Auto,
         validator_registration_batch_size: None,
     };
 

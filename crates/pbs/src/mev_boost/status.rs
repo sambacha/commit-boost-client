@@ -5,6 +5,7 @@ use cb_common::{
     pbs::{RelayClient, error::PbsError},
     utils::{get_user_agent_with_version, read_chunked_body_with_max},
 };
+use futures::FutureExt;
 use futures::future::select_ok;
 use reqwest::header::USER_AGENT;
 use tracing::{debug, error};
@@ -32,10 +33,17 @@ pub async fn get_status<S: BuilderApiState>(
 
         let relays = state.all_relays();
         let mut handles = Vec::with_capacity(relays.len());
-        for relay in relays {
-            handles.push(Box::pin(send_relay_check(relay, send_headers.clone())));
+        for relay in relays.iter().cloned() {
+            handles.push(tokio::spawn(send_relay_check(relay, send_headers.clone())).map(
+                |join_result| match join_result {
+                    Ok(res) => res,
+                    Err(err) => Err(PbsError::TokioJoinError(err)),
+                },
+            ));
         }
 
+        // Return on the first successful relay response. Remaining spawned
+        // checks continue in the background to preserve broadcast semantics.
         // return ok if at least one relay returns 200
         let results = select_ok(handles).await;
         match results {
@@ -45,7 +53,7 @@ pub async fn get_status<S: BuilderApiState>(
     }
 }
 
-async fn send_relay_check(relay: &RelayClient, headers: HeaderMap) -> Result<(), PbsError> {
+async fn send_relay_check(relay: RelayClient, headers: HeaderMap) -> Result<(), PbsError> {
     let url = relay.get_status_url()?;
 
     let start_request = Instant::now();
