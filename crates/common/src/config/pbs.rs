@@ -152,6 +152,12 @@ pub struct PbsConfig {
     /// Maximum number of retries for validator registration request per relay
     #[serde(default = "default_u32::<REGISTER_VALIDATOR_RETRY_LIMIT>")]
     pub register_validator_retry_limit: u32,
+    /// Maximum number of in-flight registration requests per inbound request
+    #[serde(default = "default_u32::<8>")]
+    pub register_validator_max_in_flight: u32,
+    /// Cache auto-detected relay registration API support between requests
+    #[serde(default = "default_bool::<true>")]
+    pub register_validator_probe_cache: bool,
     /// Maximum number of validators to send to relays in a single registration
     /// request
     #[serde(deserialize_with = "empty_string_as_none", default)]
@@ -182,6 +188,10 @@ impl PbsConfig {
         ensure!(
             self.register_validator_retry_limit > 0,
             "register_validator_retry_limit must be greater than 0"
+        );
+        ensure!(
+            self.register_validator_max_in_flight > 0,
+            "register_validator_max_in_flight must be greater than 0"
         );
 
         ensure!(

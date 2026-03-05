@@ -95,6 +95,8 @@ pub fn get_pbs_static_config(port: u16) -> PbsConfig {
         rpc_url: None,
         http_timeout_seconds: 10,
         register_validator_retry_limit: u32::MAX,
+        register_validator_max_in_flight: 8,
+        register_validator_probe_cache: true,
         validator_registration_batch_size: None,
         mux_registry_refresh_interval_seconds: 5,
     }

@@ -51,6 +51,8 @@ async fn test_load_pbs_happy() -> Result<()> {
     assert_eq!(config.pbs.pbs_config.timeout_get_header_ms, 950);
     assert_eq!(config.pbs.pbs_config.timeout_get_payload_ms, 4000);
     assert_eq!(config.pbs.pbs_config.timeout_register_validator_ms, 3000);
+    assert_eq!(config.pbs.pbs_config.register_validator_max_in_flight, 8);
+    assert!(config.pbs.pbs_config.register_validator_probe_cache);
 
     // Bid settings and validation
     assert!(!config.pbs.pbs_config.skip_sigverify);
@@ -113,6 +115,22 @@ async fn test_validate_bad_timeout_register_validator_ms() -> Result<()> {
             .unwrap_err()
             .to_string()
             .contains("timeout_register_validator_ms must be greater than 0")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validate_bad_register_validator_max_in_flight() -> Result<()> {
+    let mut config = load_happy_config().await?;
+    config.pbs.pbs_config.register_validator_max_in_flight = 0;
+
+    let result = config.validate().await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("register_validator_max_in_flight must be greater than 0")
     );
     Ok(())
 }

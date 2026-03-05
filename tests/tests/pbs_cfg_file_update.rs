@@ -65,6 +65,8 @@ async fn test_cfg_file_update() -> Result<()> {
         ssv_public_api_url: Url::parse("http://example.com").unwrap(),
         http_timeout_seconds: 10,
         register_validator_retry_limit: 3,
+        register_validator_max_in_flight: 8,
+        register_validator_probe_cache: true,
         validator_registration_batch_size: None,
         mux_registry_refresh_interval_seconds: 384,
     };

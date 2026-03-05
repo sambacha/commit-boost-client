@@ -1,4 +1,10 @@
-use std::{str::FromStr, sync::Arc};
+use std::{
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 use alloy::primitives::B256;
 use eyre::WrapErr;
@@ -12,8 +18,28 @@ use super::{
     error::PbsError,
 };
 use crate::{
-    DEFAULT_REQUEST_TIMEOUT, config::RelayConfig, pbs::BuilderApiVersion, types::BlsPublicKey,
+    DEFAULT_REQUEST_TIMEOUT,
+    config::{RegistrationApi, RelayConfig},
+    pbs::BuilderApiVersion,
+    types::BlsPublicKey,
 };
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RelayRegistrationCapability {
+    Unknown = 0,
+    V1Only = 1,
+    V2Supported = 2,
+}
+
+impl RelayRegistrationCapability {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::V1Only,
+            2 => Self::V2Supported,
+            _ => Self::Unknown,
+        }
+    }
+}
 
 /// A parsed entry of the relay url in the format: scheme://pubkey@host
 #[derive(Debug, Clone)]
@@ -59,6 +85,8 @@ pub struct RelayClient {
     pub client: reqwest::Client,
     /// Configuration of the relay
     pub config: Arc<RelayConfig>,
+    /// Runtime registration API support cache for `registration_api = "auto"`
+    registration_capability: Arc<AtomicU8>,
 }
 
 impl RelayClient {
@@ -80,7 +108,18 @@ impl RelayClient {
             .timeout(DEFAULT_REQUEST_TIMEOUT)
             .build()?;
 
-        Ok(Self { id: Arc::new(config.id().to_owned()), client, config: Arc::new(config) })
+        let initial_capability = match config.registration_api {
+            RegistrationApi::V1 => RelayRegistrationCapability::V1Only,
+            RegistrationApi::V2 => RelayRegistrationCapability::V2Supported,
+            RegistrationApi::Auto => RelayRegistrationCapability::Unknown,
+        };
+
+        Ok(Self {
+            id: Arc::new(config.id().to_owned()),
+            client,
+            config: Arc::new(config),
+            registration_capability: Arc::new(AtomicU8::new(initial_capability as u8)),
+        })
     }
 
     pub fn pubkey(&self) -> &BlsPublicKey {
@@ -130,6 +169,14 @@ impl RelayClient {
 
     pub fn submit_block_url(&self, api_version: BuilderApiVersion) -> Result<Url, PbsError> {
         self.builder_api_url(SUBMIT_BLOCK_PATH, api_version)
+    }
+
+    pub fn registration_capability(&self) -> RelayRegistrationCapability {
+        RelayRegistrationCapability::from_u8(self.registration_capability.load(Ordering::Relaxed))
+    }
+
+    pub fn set_registration_capability(&self, capability: RelayRegistrationCapability) {
+        self.registration_capability.store(capability as u8, Ordering::Relaxed);
     }
 }
 

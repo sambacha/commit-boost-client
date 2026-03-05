@@ -12,6 +12,8 @@ skip_sigverify = false
 timeout_get_header_ms = 950
 timeout_get_payload_ms = 4000
 timeout_register_validator_ms = 3000
+register_validator_max_in_flight = 8
+register_validator_probe_cache = true
 wait_all_registrations = true
 with_signer = false
 

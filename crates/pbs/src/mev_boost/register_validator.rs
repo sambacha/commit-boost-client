@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 
 use alloy::{primitives::Bytes, rpc::types::beacon::relay::ValidatorRegistration};
 use axum::http::{HeaderMap, HeaderValue};
@@ -6,7 +9,8 @@ use cb_common::{
     config::RegistrationApi,
     pbs::{
         BuilderApiVersion, HEADER_START_TIME_UNIX_MS, RegisterValidatorContext,
-        RegisterValidatorV2Request, RegistrationMode, RelayClient, error::PbsError,
+        RegisterValidatorV2Request, RegistrationMode, RelayClient, RelayRegistrationCapability,
+        error::PbsError,
     },
     utils::{get_user_agent_with_version, read_chunked_body_with_max, utcnow_ms},
 };
@@ -21,14 +25,61 @@ use uuid::Uuid;
 
 use crate::{
     constants::{MAX_SIZE_DEFAULT, REGISTER_VALIDATOR_ENDPOINT_TAG, TIMEOUT_ERROR_CODE_STR},
-    metrics::{RELAY_LATENCY, RELAY_STATUS_CODE},
+    metrics::{
+        RELAY_LATENCY, RELAY_REGISTRATION_FALLBACK, RELAY_REGISTRATION_INFLIGHT,
+        RELAY_REGISTRATION_WIRE_VERSION, RELAY_STATUS_CODE,
+    },
     state::{BuilderApiState, PbsState},
 };
 
-#[derive(Clone)]
-struct RegistrationBodies {
-    v1: Bytes,
-    v2: Bytes,
+const FALLBACK_REASON_NOT_FOUND: &str = "404";
+
+#[derive(Debug)]
+struct RegistrationBatchPayload {
+    registrations: Arc<Vec<ValidatorRegistration>>,
+    context: RegisterValidatorContext,
+    v1: OnceLock<Bytes>,
+    v2: OnceLock<Bytes>,
+}
+
+impl RegistrationBatchPayload {
+    fn new(registrations: Vec<ValidatorRegistration>, context: RegisterValidatorContext) -> Self {
+        Self {
+            registrations: Arc::new(registrations),
+            context,
+            v1: OnceLock::new(),
+            v2: OnceLock::new(),
+        }
+    }
+
+    fn n_regs(&self) -> usize {
+        self.registrations.len()
+    }
+
+    fn body_for(&self, api_version: BuilderApiVersion) -> Bytes {
+        match api_version {
+            BuilderApiVersion::V1 => self
+                .v1
+                .get_or_init(|| {
+                    // SAFETY: serializing typed registration payloads should not fail.
+                    Bytes::from(serde_json::to_vec(self.registrations.as_ref()).unwrap())
+                })
+                .clone(),
+            BuilderApiVersion::V2 => self
+                .v2
+                .get_or_init(|| {
+                    // SAFETY: serializing typed registration payloads should not fail.
+                    Bytes::from(
+                        serde_json::to_vec(&RegisterValidatorV2Request {
+                            registrations: self.registrations.as_ref().to_vec(),
+                            context: self.context.clone(),
+                        })
+                        .unwrap(),
+                    )
+                })
+                .clone(),
+        }
+    }
 }
 
 /// Implements https://ethereum.github.io/builder-specs/#/Builder/registerValidator
@@ -56,50 +107,47 @@ pub async fn register_validator<S: BuilderApiState>(
         },
     });
 
-    let total_regs = registrations.len();
+    let batches: Vec<_> = if let Some(batch_size) =
+        state.config.pbs_config.validator_registration_batch_size
+    {
+        registrations
+            .chunks(batch_size)
+            .map(|batch| Arc::new(RegistrationBatchPayload::new(batch.to_vec(), context.clone())))
+            .collect()
+    } else {
+        vec![Arc::new(RegistrationBatchPayload::new(registrations, context.clone()))]
+    };
 
-    // prepare both v1 and v2 payloads in advance
-    let bodies: Box<dyn Iterator<Item = (usize, RegistrationBodies)>> =
-        if let Some(batch_size) = state.config.pbs_config.validator_registration_batch_size {
-            Box::new(registrations.chunks(batch_size).map(|batch| {
-                // SAFETY: serializing typed registration payloads should not fail.
-                let v1 = serde_json::to_vec(batch).unwrap();
-                let v2 = serde_json::to_vec(&RegisterValidatorV2Request {
-                    registrations: batch.to_vec(),
-                    context: context.clone(),
-                })
-                .unwrap();
-                (batch.len(), RegistrationBodies { v1: Bytes::from(v1), v2: Bytes::from(v2) })
-            }))
-        } else {
-            let v1 = serde_json::to_vec(&registrations).unwrap();
-            let v2 = serde_json::to_vec(&RegisterValidatorV2Request {
-                registrations,
-                context: context.clone(),
-            })
-            .unwrap();
-            Box::new(std::iter::once((
-                total_regs,
-                RegistrationBodies { v1: Bytes::from(v1), v2: Bytes::from(v2) },
-            )))
-        };
-
-    let mut handles = Vec::with_capacity(state.all_relays().len());
+    let mut handles = Vec::with_capacity(state.all_relays().len() * batches.len());
     let timeout_ms = state.pbs_config().timeout_register_validator_ms;
     let retry_limit = state.pbs_config().register_validator_retry_limit;
+    let probe_cache_enabled = state.pbs_config().register_validator_probe_cache;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(
+        state.pbs_config().register_validator_max_in_flight as usize,
+    ));
 
-    for (n_regs, body) in bodies {
+    for batch in batches {
         for relay in state.all_relays().iter().cloned() {
+            let semaphore = Arc::clone(&semaphore);
+            let batch = Arc::clone(&batch);
+            let send_headers = send_headers.clone();
             handles.push(
                 tokio::spawn(
-                    send_register_validator_with_timeout(
-                        n_regs,
-                        body.clone(),
-                        relay,
-                        send_headers.clone(),
-                        timeout_ms,
-                        retry_limit,
-                    )
+                    async move {
+                        let _permit = semaphore
+                            .acquire_owned()
+                            .await
+                            .expect("register validator semaphore should not close");
+                        send_register_validator_with_timeout(
+                            batch,
+                            relay,
+                            send_headers,
+                            timeout_ms,
+                            retry_limit,
+                            probe_cache_enabled,
+                        )
+                        .await
+                    }
                     .in_current_span(),
                 )
                 .map(|join_result| match join_result {
@@ -131,41 +179,66 @@ pub async fn register_validator<S: BuilderApiState>(
 /// Register validator to relay, retry connection errors until the
 /// given timeout has passed
 async fn send_register_validator_with_timeout(
-    n_regs: usize,
-    body: RegistrationBodies,
+    batch: Arc<RegistrationBatchPayload>,
     relay: RelayClient,
     headers: HeaderMap,
     timeout_ms: u64,
     retry_limit: u32,
+    probe_cache_enabled: bool,
 ) -> Result<(), PbsError> {
-    let mut remaining_timeout_ms = timeout_ms;
+    let deadline = Instant::now().checked_add(Duration::from_millis(timeout_ms));
     let mut retry = 0;
     let mut backoff = Duration::from_millis(250);
-    let mut api_version = match relay.config.registration_api {
-        RegistrationApi::V1 => BuilderApiVersion::V1,
-        RegistrationApi::V2 | RegistrationApi::Auto => BuilderApiVersion::V2,
-    };
+    let mut api_version = initial_registration_api_version(&relay, probe_cache_enabled);
 
     loop {
-        let start_request = Instant::now();
+        let remaining_timeout = match deadline {
+            Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+            None => Duration::from_millis(timeout_ms),
+        };
+        if remaining_timeout.is_zero() {
+            return Err(PbsError::RelayResponse {
+                error_msg: "register validator deadline exhausted before request".to_string(),
+                code: reqwest::StatusCode::REQUEST_TIMEOUT.as_u16(),
+            });
+        }
+
         match send_register_validator(
-            n_regs,
-            body.clone(),
+            Arc::clone(&batch),
             &relay,
             headers.clone(),
-            remaining_timeout_ms,
+            remaining_timeout,
             retry,
             api_version,
         )
         .await
         {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                if probe_cache_enabled
+                    && matches!(relay.config.registration_api, RegistrationApi::Auto)
+                    && matches!(api_version, BuilderApiVersion::V2)
+                {
+                    relay.set_registration_capability(RelayRegistrationCapability::V2Supported);
+                }
+                return Ok(());
+            }
 
             Err(err)
                 if err.is_not_found()
                     && matches!(relay.config.registration_api, RegistrationApi::Auto)
                     && matches!(api_version, BuilderApiVersion::V2) =>
             {
+                if probe_cache_enabled {
+                    relay.set_registration_capability(RelayRegistrationCapability::V1Only);
+                }
+                RELAY_REGISTRATION_FALLBACK
+                    .with_label_values(&[
+                        relay.id.as_ref().as_str(),
+                        "v2",
+                        "v1",
+                        FALLBACK_REASON_NOT_FOUND,
+                    ])
+                    .inc();
                 warn!(
                     relay_id = relay.id.as_ref(),
                     "relay does not support validator registration v2 endpoint, retrying with v1"
@@ -184,15 +257,17 @@ async fn send_register_validator_with_timeout(
                     );
                     return Err(err);
                 }
-                tokio::time::sleep(backoff).await;
-                backoff += Duration::from_millis(250);
-
-                remaining_timeout_ms =
-                    timeout_ms.saturating_sub(start_request.elapsed().as_millis() as u64);
-
-                if remaining_timeout_ms == 0 {
+                let sleep_time = match deadline {
+                    Some(deadline) => {
+                        deadline.saturating_duration_since(Instant::now()).min(backoff)
+                    }
+                    None => backoff,
+                };
+                if sleep_time.is_zero() {
                     return Err(err);
                 }
+                tokio::time::sleep(sleep_time).await;
+                backoff += Duration::from_millis(250);
             }
 
             Err(err) => return Err(err),
@@ -201,42 +276,38 @@ async fn send_register_validator_with_timeout(
 }
 
 async fn send_register_validator(
-    n_regs: usize,
-    body: RegistrationBodies,
+    batch: Arc<RegistrationBatchPayload>,
     relay: &RelayClient,
     headers: HeaderMap,
-    timeout_ms: u64,
+    timeout: Duration,
     retry: u32,
     api_version: BuilderApiVersion,
 ) -> Result<(), PbsError> {
     let url = relay.register_validator_url(api_version)?;
-    let body = match api_version {
-        BuilderApiVersion::V1 => body.v1,
-        BuilderApiVersion::V2 => body.v2,
-    };
+    let body = batch.body_for(api_version);
+    let api_version_label = api_version.to_string();
+    RELAY_REGISTRATION_WIRE_VERSION
+        .with_label_values(&[relay.id.as_ref().as_str(), api_version_label.as_str()])
+        .inc();
+    RELAY_REGISTRATION_INFLIGHT.with_label_values(&[relay.id.as_ref()]).inc();
 
     let start_request = Instant::now();
-    let res = match relay
-        .client
-        .post(url)
-        .timeout(Duration::from_millis(timeout_ms))
-        .headers(headers)
-        .body(body.0)
-        .send()
-        .await
-    {
-        Ok(res) => res,
-        Err(err) => {
-            RELAY_STATUS_CODE
-                .with_label_values(&[
-                    TIMEOUT_ERROR_CODE_STR,
-                    REGISTER_VALIDATOR_ENDPOINT_TAG,
-                    &relay.id,
-                ])
-                .inc();
-            return Err(err.into());
-        }
-    };
+    let res =
+        match relay.client.post(url).timeout(timeout).headers(headers).body(body.0).send().await {
+            Ok(res) => res,
+            Err(err) => {
+                RELAY_REGISTRATION_INFLIGHT.with_label_values(&[relay.id.as_ref()]).dec();
+                RELAY_STATUS_CODE
+                    .with_label_values(&[
+                        TIMEOUT_ERROR_CODE_STR,
+                        REGISTER_VALIDATOR_ENDPOINT_TAG,
+                        &relay.id,
+                    ])
+                    .inc();
+                return Err(err.into());
+            }
+        };
+    RELAY_REGISTRATION_INFLIGHT.with_label_values(&[relay.id.as_ref()]).dec();
     let request_latency = start_request.elapsed();
     RELAY_LATENCY
         .with_label_values(&[REGISTER_VALIDATOR_ENDPOINT_TAG, &relay.id])
@@ -271,9 +342,78 @@ async fn send_register_validator(
         api_version = %api_version,
         ?code,
         latency = ?request_latency,
-        num_registrations = n_regs,
+        num_registrations = batch.n_regs(),
         "registration successful"
     );
 
     Ok(())
+}
+
+fn initial_registration_api_version(
+    relay: &RelayClient,
+    probe_cache_enabled: bool,
+) -> BuilderApiVersion {
+    match relay.config.registration_api {
+        RegistrationApi::V1 => BuilderApiVersion::V1,
+        RegistrationApi::V2 => BuilderApiVersion::V2,
+        RegistrationApi::Auto => {
+            if !probe_cache_enabled {
+                return BuilderApiVersion::V2;
+            }
+
+            match relay.registration_capability() {
+                RelayRegistrationCapability::V1Only => BuilderApiVersion::V1,
+                RelayRegistrationCapability::Unknown | RelayRegistrationCapability::V2Supported => {
+                    BuilderApiVersion::V2
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::rpc::types::beacon::relay::ValidatorRegistration;
+
+    use super::{
+        BuilderApiVersion, RegisterValidatorContext, RegistrationBatchPayload, RegistrationMode,
+    };
+
+    #[test]
+    fn test_registration_batch_payload_lazy_serialization() {
+        let payload = RegistrationBatchPayload::new(
+            vec![test_registration()],
+            RegisterValidatorContext {
+                idempotency_key: "test-id".to_string(),
+                source: Some("test".to_string()),
+                mode: RegistrationMode::Any,
+            },
+        );
+
+        assert!(payload.v1.get().is_none());
+        assert!(payload.v2.get().is_none());
+
+        let _ = payload.body_for(BuilderApiVersion::V2);
+        assert!(payload.v1.get().is_none());
+        assert!(payload.v2.get().is_some());
+
+        let _ = payload.body_for(BuilderApiVersion::V1);
+        assert!(payload.v1.get().is_some());
+        assert!(payload.v2.get().is_some());
+    }
+
+    fn test_registration() -> ValidatorRegistration {
+        serde_json::from_str(
+            r#"{
+            "message": {
+                "fee_recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "gas_limit": "100000",
+                "timestamp": "1000000",
+                "pubkey": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "signature": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }"#,
+        )
+        .unwrap()
+    }
 }
