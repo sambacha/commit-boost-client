@@ -68,6 +68,12 @@ http_timeout_seconds = 10
 # Maximum number of retries for validator registrations per relay
 # OPTIONAL, DEFAULT: 3
 register_validator_retry_limit = 3
+# Maximum number of concurrent outbound validator registration requests per inbound request.
+# OPTIONAL, DEFAULT: 8
+register_validator_max_in_flight = 8
+# Whether to cache relay registration API capability for `registration_api = "auto"`.
+# OPTIONAL, DEFAULT: true
+register_validator_probe_cache = true
 # Maximum number of validators to register in a single request.
 # OPTIONAL, DEFAULT: "" (unlimited)
 validator_registration_batch_size = ""
@@ -92,6 +98,10 @@ headers = { X-MyCustomHeader = "MyCustomValue" }
 # GET parameters to add to each request URL for this relay
 # OPTIONAL
 get_params = { param1 = "value1", param2 = "value2" }
+# Which registration wire format to use when sending validator registrations to this relay.
+# `auto` tries `/eth/v2/builder/validators` first and falls back to v1 on 404.
+# OPTIONAL, DEFAULT: "auto"
+registration_api = "auto"
 # Whether to enable timing games, as tuned by `target_first_request_ms` and `frequency_get_header_ms`.
 # NOTE: if neither `target_first_request_ms` nor `frequency_get_header_ms` is set, this flag has no effect.
 #

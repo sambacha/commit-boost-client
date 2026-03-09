@@ -1628,6 +1628,7 @@ dependencies = [
  "lazy_static",
  "notify",
  "pbkdf2 0.12.2",
+ "proptest",
  "rand 0.9.2",
  "rayon",
  "reqwest 0.12.23",
@@ -1648,6 +1649,27 @@ dependencies = [
  "types",
  "unicode-normalization",
  "url",
+]
+
+[[package]]
+name = "cb-greenfield"
+version = "0.9.3"
+dependencies = [
+ "async-trait",
+ "axum 0.8.4",
+ "bytes",
+ "clap",
+ "eyre",
+ "parking_lot",
+ "proptest",
+ "reqwest 0.12.23",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.16",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid 1.18.1",
 ]
 
 [[package]]
@@ -1679,6 +1701,7 @@ dependencies = [
  "notify",
  "parking_lot",
  "prometheus",
+ "proptest",
  "reqwest 0.12.23",
  "serde",
  "serde_json",
@@ -1729,6 +1752,7 @@ dependencies = [
  "cb-pbs",
  "cb-signer",
  "eyre",
+ "proptest",
  "reqwest 0.12.23",
  "serde",
  "serde_json",
@@ -1741,6 +1765,7 @@ dependencies = [
  "tree_hash",
  "types",
  "url",
+ "uuid 1.18.1",
 ]
 
 [[package]]

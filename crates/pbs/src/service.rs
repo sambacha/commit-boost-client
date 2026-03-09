@@ -186,8 +186,8 @@ impl PbsService {
 
                         // Find any pubkeys that were removed
                         for (pubkey, existing_runtime) in mux_lookup.iter() {
-                            if existing_runtime.id == runtime_config.id &&
-                                !pubkey_set.contains(pubkey)
+                            if existing_runtime.id == runtime_config.id
+                                && !pubkey_set.contains(pubkey)
                             {
                                 removed_pubkeys.insert(pubkey.clone());
                             }

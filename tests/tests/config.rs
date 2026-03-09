@@ -1,7 +1,11 @@
 use std::{net::Ipv4Addr, path::PathBuf};
 
 use alloy::primitives::U256;
-use cb_common::{config::CommitBoostConfig, types::Chain, utils::WEI_PER_ETH};
+use cb_common::{
+    config::{CommitBoostConfig, RegistrationApi, RelayConfig},
+    types::Chain,
+    utils::WEI_PER_ETH,
+};
 use eyre::Result;
 use url::Url;
 
@@ -47,6 +51,8 @@ async fn test_load_pbs_happy() -> Result<()> {
     assert_eq!(config.pbs.pbs_config.timeout_get_header_ms, 950);
     assert_eq!(config.pbs.pbs_config.timeout_get_payload_ms, 4000);
     assert_eq!(config.pbs.pbs_config.timeout_register_validator_ms, 3000);
+    assert_eq!(config.pbs.pbs_config.register_validator_max_in_flight, 8);
+    assert!(config.pbs.pbs_config.register_validator_probe_cache);
 
     // Bid settings and validation
     assert!(!config.pbs.pbs_config.skip_sigverify);
@@ -60,6 +66,7 @@ async fn test_load_pbs_happy() -> Result<()> {
     let relay = &config.relays[0];
     assert_eq!(relay.id, Some("example-relay".to_string()));
     assert_eq!(relay.entry.url, "http://0xa1cec75a3f0661e99299274182938151e8433c61a19222347ea1313d839229cb4ce4e3e5aa2bdeb71c8fcf1b084963c2@abc.xyz".parse::<Url>().unwrap());
+    assert_eq!(relay.registration_api, RegistrationApi::Auto);
     assert!(!relay.enable_timing_games);
     assert_eq!(relay.target_first_request_ms, Some(200));
     assert_eq!(relay.frequency_get_header_ms, Some(300));
@@ -108,6 +115,22 @@ async fn test_validate_bad_timeout_register_validator_ms() -> Result<()> {
             .unwrap_err()
             .to_string()
             .contains("timeout_register_validator_ms must be greater than 0")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validate_bad_register_validator_max_in_flight() -> Result<()> {
+    let mut config = load_happy_config().await?;
+    config.pbs.pbs_config.register_validator_max_in_flight = 0;
+
+    let result = config.validate().await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("register_validator_max_in_flight must be greater than 0")
     );
     Ok(())
 }
@@ -180,4 +203,27 @@ async fn test_validate_config_with_no_relays() -> Result<()> {
     let result = config.validate().await;
     assert!(result.is_ok());
     Ok(())
+}
+
+#[test]
+fn test_relay_registration_api_defaults_to_auto() {
+    let relay: RelayConfig = serde_json::from_str(
+        r#"{
+            "url": "http://0xa1cec75a3f0661e99299274182938151e8433c61a19222347ea1313d839229cb4ce4e3e5aa2bdeb71c8fcf1b084963c2@abc.xyz"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(relay.registration_api, RegistrationApi::Auto);
+}
+
+#[test]
+fn test_relay_registration_api_v2_parse() {
+    let relay: RelayConfig = serde_json::from_str(
+        r#"{
+            "url": "http://0xa1cec75a3f0661e99299274182938151e8433c61a19222347ea1313d839229cb4ce4e3e5aa2bdeb71c8fcf1b084963c2@abc.xyz",
+            "registration_api": "v2"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(relay.registration_api, RegistrationApi::V2);
 }

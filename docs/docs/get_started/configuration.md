@@ -31,6 +31,20 @@ After the sidecar is started, it will expose a port (`18550` in this example), t
 In this setup, the signer module will not be started.
 :::
 
+## Relay Registration Wire Format
+
+You can choose which validator registration wire format PBS uses per relay:
+
+```toml
+[[relays]]
+url = "http://<pubkey>@relay.example"
+registration_api = "auto" # auto | v1 | v2
+```
+
+- `auto` (default): send to `/eth/v2/builder/validators`, fallback to v1 only on `404`.
+- `v1`: only send to `/eth/v1/builder/validators`.
+- `v2`: only send to `/eth/v2/builder/validators`.
+
 ## Signer module
 
 Commit-Boost supports both local and remote signers. The signer module is responsible for signing the transactions that other modules generates. Please note that only one signer at a time is allowed.

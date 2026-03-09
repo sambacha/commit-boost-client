@@ -56,6 +56,7 @@ const sidebars = {
         'developing/custom-modules',
         'developing/commit-module',
         'developing/environment-setup',
+        'developing/property-testing',
       ],
     },
     {

@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use alloy::rpc::types::beacon::relay::ValidatorRegistration;
 use async_trait::async_trait;
 use axum::{Router, http::HeaderMap};
 use cb_common::pbs::{
-    BuilderApiVersion, GetHeaderParams, GetHeaderResponse, SignedBlindedBeaconBlock,
-    SubmitBlindedBlockResponse,
+    BuilderApiVersion, GetHeaderParams, GetHeaderResponse, RegisterValidatorContext,
+    SignedBlindedBeaconBlock, SubmitBlindedBlockResponse,
 };
 
 use crate::{
@@ -46,11 +47,12 @@ pub trait BuilderApi<S: BuilderApiState>: 'static {
 
     /// https://ethereum.github.io/builder-specs/#/Builder/registerValidator
     async fn register_validator(
-        registrations: Vec<serde_json::Value>,
+        registrations: Vec<ValidatorRegistration>,
         req_headers: HeaderMap,
         state: PbsState<S>,
+        context: Option<RegisterValidatorContext>,
     ) -> eyre::Result<()> {
-        mev_boost::register_validator(registrations, req_headers, state).await
+        mev_boost::register_validator(registrations, req_headers, state, context).await
     }
 
     async fn reload(state: PbsState<S>) -> eyre::Result<PbsState<S>> {

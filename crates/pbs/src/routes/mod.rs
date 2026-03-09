@@ -6,7 +6,7 @@ mod status;
 mod submit_block;
 
 use get_header::handle_get_header;
-use register_validator::handle_register_validator;
+use register_validator::{handle_register_validator_v1, handle_register_validator_v2};
 pub use router::create_app_router;
 use status::handle_get_status;
 use submit_block::handle_submit_block_v1;

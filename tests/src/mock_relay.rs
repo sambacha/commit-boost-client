@@ -1,12 +1,17 @@
 use std::{
+    collections::{BTreeMap, VecDeque},
     net::SocketAddr,
     sync::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use alloy::{primitives::U256, rpc::types::beacon::relay::ValidatorRegistration};
+use alloy::{
+    primitives::{Address, U256},
+    rpc::types::beacon::relay::ValidatorRegistration,
+};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -19,8 +24,9 @@ use cb_common::{
         BUILDER_V1_API_PATH, BUILDER_V2_API_PATH, BlobsBundle, BuilderBid, BuilderBidElectra,
         ExecutionPayloadElectra, ExecutionPayloadHeaderElectra, ExecutionRequests, ForkName,
         GET_HEADER_PATH, GET_STATUS_PATH, GetHeaderParams, GetHeaderResponse, GetPayloadInfo,
-        PayloadAndBlobs, REGISTER_VALIDATOR_PATH, SUBMIT_BLOCK_PATH, SignedBlindedBeaconBlock,
-        SignedBuilderBid, SubmitBlindedBlockResponse,
+        PayloadAndBlobs, REGISTER_VALIDATOR_PATH, RegisterValidatorContext,
+        RegisterValidatorV2Request, SUBMIT_BLOCK_PATH, SignedBlindedBeaconBlock, SignedBuilderBid,
+        SubmitBlindedBlockResponse,
     },
     signature::sign_builder_root,
     types::{BlsSecretKey, Chain},
@@ -28,9 +34,16 @@ use cb_common::{
 };
 use cb_pbs::MAX_SIZE_SUBMIT_BLOCK_RESPONSE;
 use lh_types::KzgProof;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tracing::debug;
+use tracing::{debug, warn};
 use tree_hash::TreeHash;
+
+const DEBUG_METRICS_PATH: &str = "/debug/metrics";
+const DEBUG_REGISTRATIONS_PATH: &str = "/debug/registrations";
+const DEBUG_REGISTRATION_BY_PUBKEY_PATH: &str = "/debug/registrations/{pubkey}";
+const MAX_IDEMPOTENCY_KEY_LEN: usize = 256;
+const MAX_SOURCE_LEN: usize = 256;
 
 pub async fn start_mock_relay_service(state: Arc<MockRelayState>, port: u16) -> eyre::Result<()> {
     let app = mock_relay_app_router(state);
@@ -42,15 +55,91 @@ pub async fn start_mock_relay_service(state: Arc<MockRelayState>, port: u16) -> 
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrationWireVersion {
+    V1,
+    V2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationOutcome {
+    Ok200,
+    NotFound404,
+    RateLimited429,
+    ServerError500,
+    ServerError503,
+    DelayMs(u64),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistrationAttemptRecord {
+    pub request_index: u64,
+    pub wire_version: RegistrationWireVersion,
+    pub status_code: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredValidatorRegistration {
+    pub pubkey: String,
+    pub registration: ValidatorRegistration,
+    pub wire_version: RegistrationWireVersion,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    pub updated_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockRelayMetricsSnapshot {
+    pub received_get_header: u64,
+    pub received_get_status: u64,
+    pub received_register_validator: u64,
+    pub received_register_validator_v1: u64,
+    pub received_register_validator_v2: u64,
+    pub received_submit_block: u64,
+    pub register_validator_inflight: u64,
+    pub register_validator_max_inflight: u64,
+    pub register_validator_v2_idempotency_keys: u64,
+    pub stored_registrations: u64,
+    pub stored_registration_upserts: u64,
+    pub registration_validation_failures: u64,
+    pub registration_status_counts: BTreeMap<String, u64>,
+    pub registration_attempt_timeline_len: u64,
+}
+
 pub struct MockRelayState {
     pub chain: Chain,
     pub signer: BlsSecretKey,
     large_body: bool,
     supports_submit_block_v2: bool,
+    supports_register_validator_v2: bool,
+    validate_registrations: bool,
     use_not_found_for_submit_block: bool,
+    use_not_found_for_register_validator_v2: bool,
+    register_validator_delay_ms: u64,
     received_get_header: Arc<AtomicU64>,
     received_get_status: Arc<AtomicU64>,
     received_register_validator: Arc<AtomicU64>,
+    received_register_validator_v1: Arc<AtomicU64>,
+    received_register_validator_v2: Arc<AtomicU64>,
+    register_validator_inflight: Arc<AtomicU64>,
+    register_validator_max_inflight: Arc<AtomicU64>,
+    stored_registration_upserts: Arc<AtomicU64>,
+    registration_validation_failures: Arc<AtomicU64>,
+    register_validator_v2_idempotency_keys: Arc<RwLock<Vec<String>>>,
+    registration_v1_script: Arc<RwLock<VecDeque<RegistrationOutcome>>>,
+    registration_v2_script: Arc<RwLock<VecDeque<RegistrationOutcome>>>,
+    registration_status_counts: Arc<RwLock<BTreeMap<String, u64>>>,
+    registration_attempt_timeline: Arc<RwLock<Vec<RegistrationAttemptRecord>>>,
+    registration_request_index: Arc<AtomicU64>,
+    stored_registrations: Arc<RwLock<BTreeMap<String, StoredValidatorRegistration>>>,
     received_submit_block: Arc<AtomicU64>,
     response_override: RwLock<Option<StatusCode>>,
 }
@@ -65,6 +154,59 @@ impl MockRelayState {
     pub fn received_register_validator(&self) -> u64 {
         self.received_register_validator.load(Ordering::Relaxed)
     }
+    pub fn received_register_validator_v1(&self) -> u64 {
+        self.received_register_validator_v1.load(Ordering::Relaxed)
+    }
+    pub fn received_register_validator_v2(&self) -> u64 {
+        self.received_register_validator_v2.load(Ordering::Relaxed)
+    }
+    pub fn register_validator_v2_idempotency_keys(&self) -> Vec<String> {
+        self.register_validator_v2_idempotency_keys.read().unwrap().clone()
+    }
+    pub fn registration_status_counts(&self) -> BTreeMap<String, u64> {
+        self.registration_status_counts.read().unwrap().clone()
+    }
+    pub fn registration_attempt_timeline(&self) -> Vec<RegistrationAttemptRecord> {
+        self.registration_attempt_timeline.read().unwrap().clone()
+    }
+    pub fn stored_registrations(&self) -> Vec<StoredValidatorRegistration> {
+        self.stored_registrations.read().unwrap().values().cloned().collect()
+    }
+    pub fn stored_registration(&self, pubkey: &str) -> Option<StoredValidatorRegistration> {
+        self.stored_registrations.read().unwrap().get(&pubkey.to_ascii_lowercase()).cloned()
+    }
+    pub fn registration_validation_failures(&self) -> u64 {
+        self.registration_validation_failures.load(Ordering::Relaxed)
+    }
+    pub fn metrics_snapshot(&self) -> MockRelayMetricsSnapshot {
+        MockRelayMetricsSnapshot {
+            received_get_header: self.received_get_header(),
+            received_get_status: self.received_get_status(),
+            received_register_validator: self.received_register_validator(),
+            received_register_validator_v1: self.received_register_validator_v1(),
+            received_register_validator_v2: self.received_register_validator_v2(),
+            received_submit_block: self.received_submit_block(),
+            register_validator_inflight: self.register_validator_inflight.load(Ordering::Relaxed),
+            register_validator_max_inflight: self.max_register_validator_inflight(),
+            register_validator_v2_idempotency_keys: self
+                .register_validator_v2_idempotency_keys
+                .read()
+                .unwrap()
+                .len() as u64,
+            stored_registrations: self.stored_registrations.read().unwrap().len() as u64,
+            stored_registration_upserts: self.stored_registration_upserts.load(Ordering::Relaxed),
+            registration_validation_failures: self.registration_validation_failures(),
+            registration_status_counts: self.registration_status_counts(),
+            registration_attempt_timeline_len: self
+                .registration_attempt_timeline
+                .read()
+                .unwrap()
+                .len() as u64,
+        }
+    }
+    pub fn max_register_validator_inflight(&self) -> u64 {
+        self.register_validator_max_inflight.load(Ordering::Relaxed)
+    }
     pub fn received_submit_block(&self) -> u64 {
         self.received_submit_block.load(Ordering::Relaxed)
     }
@@ -74,11 +216,39 @@ impl MockRelayState {
     pub fn supports_submit_block_v2(&self) -> bool {
         self.supports_submit_block_v2
     }
+    pub fn supports_register_validator_v2(&self) -> bool {
+        self.supports_register_validator_v2
+    }
+    pub fn validate_registrations(&self) -> bool {
+        self.validate_registrations
+    }
     pub fn use_not_found_for_submit_block(&self) -> bool {
         self.use_not_found_for_submit_block
     }
+    pub fn use_not_found_for_register_validator_v2(&self) -> bool {
+        self.use_not_found_for_register_validator_v2
+    }
+    pub fn register_validator_delay_ms(&self) -> u64 {
+        self.register_validator_delay_ms
+    }
     pub fn set_response_override(&self, status: StatusCode) {
         *self.response_override.write().unwrap() = Some(status);
+    }
+    pub fn push_registration_script_v1(
+        &self,
+        outcomes: impl IntoIterator<Item = RegistrationOutcome>,
+    ) {
+        self.registration_v1_script.write().unwrap().extend(outcomes);
+    }
+    pub fn push_registration_script_v2(
+        &self,
+        outcomes: impl IntoIterator<Item = RegistrationOutcome>,
+    ) {
+        self.registration_v2_script.write().unwrap().extend(outcomes);
+    }
+    pub fn clear_registration_scripts(&self) {
+        self.registration_v1_script.write().unwrap().clear();
+        self.registration_v2_script.write().unwrap().clear();
     }
 }
 
@@ -89,10 +259,27 @@ impl MockRelayState {
             signer,
             large_body: false,
             supports_submit_block_v2: true,
+            supports_register_validator_v2: true,
+            validate_registrations: true,
             use_not_found_for_submit_block: false,
+            use_not_found_for_register_validator_v2: false,
+            register_validator_delay_ms: 0,
             received_get_header: Default::default(),
             received_get_status: Default::default(),
             received_register_validator: Default::default(),
+            received_register_validator_v1: Default::default(),
+            received_register_validator_v2: Default::default(),
+            register_validator_inflight: Default::default(),
+            register_validator_max_inflight: Default::default(),
+            stored_registration_upserts: Default::default(),
+            registration_validation_failures: Default::default(),
+            register_validator_v2_idempotency_keys: Default::default(),
+            registration_v1_script: Default::default(),
+            registration_v2_script: Default::default(),
+            registration_status_counts: Default::default(),
+            registration_attempt_timeline: Default::default(),
+            registration_request_index: Default::default(),
+            stored_registrations: Default::default(),
             received_submit_block: Default::default(),
             response_override: RwLock::new(None),
         }
@@ -106,8 +293,24 @@ impl MockRelayState {
         Self { supports_submit_block_v2: false, ..self }
     }
 
+    pub fn with_no_register_validator_v2(self) -> Self {
+        Self { supports_register_validator_v2: false, ..self }
+    }
+
+    pub fn with_registration_validation_disabled(self) -> Self {
+        Self { validate_registrations: false, ..self }
+    }
+
     pub fn with_not_found_for_submit_block(self) -> Self {
         Self { use_not_found_for_submit_block: true, ..self }
+    }
+
+    pub fn with_not_found_for_register_validator_v2(self) -> Self {
+        Self { use_not_found_for_register_validator_v2: true, ..self }
+    }
+
+    pub fn with_register_validator_delay_ms(self, delay_ms: u64) -> Self {
+        Self { register_validator_delay_ms: delay_ms, ..self }
     }
 }
 
@@ -115,18 +318,28 @@ pub fn mock_relay_app_router(state: Arc<MockRelayState>) -> Router {
     let v1_builder_routes = Router::new()
         .route(GET_HEADER_PATH, get(handle_get_header))
         .route(GET_STATUS_PATH, get(handle_get_status))
-        .route(REGISTER_VALIDATOR_PATH, post(handle_register_validator))
+        .route(REGISTER_VALIDATOR_PATH, post(handle_register_validator_v1))
         .route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v1));
 
-    let v2_builder_routes = if state.supports_submit_block_v2 {
-        Router::new().route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v2))
-    } else {
-        Router::new()
-    };
+    let mut v2_builder_routes = Router::new();
+    if state.supports_submit_block_v2 {
+        v2_builder_routes =
+            v2_builder_routes.route(SUBMIT_BLOCK_PATH, post(handle_submit_block_v2));
+    }
+    if state.supports_register_validator_v2 {
+        v2_builder_routes =
+            v2_builder_routes.route(REGISTER_VALIDATOR_PATH, post(handle_register_validator_v2));
+    }
 
     let builder_router_v1 = Router::new().nest(BUILDER_V1_API_PATH, v1_builder_routes);
     let builder_router_v2 = Router::new().nest(BUILDER_V2_API_PATH, v2_builder_routes);
-    Router::new().merge(builder_router_v1).merge(builder_router_v2).with_state(state)
+    Router::new()
+        .merge(builder_router_v1)
+        .merge(builder_router_v2)
+        .route(DEBUG_METRICS_PATH, get(handle_debug_metrics))
+        .route(DEBUG_REGISTRATIONS_PATH, get(handle_debug_registrations))
+        .route(DEBUG_REGISTRATION_BY_PUBKEY_PATH, get(handle_debug_registration_by_pubkey))
+        .with_state(state)
 }
 
 async fn handle_get_header(
@@ -169,18 +382,109 @@ async fn handle_get_status(State(state): State<Arc<MockRelayState>>) -> impl Int
     StatusCode::OK
 }
 
-async fn handle_register_validator(
+async fn handle_register_validator_v1(
     State(state): State<Arc<MockRelayState>>,
     Json(validators): Json<Vec<ValidatorRegistration>>,
 ) -> impl IntoResponse {
+    let request_index = state.registration_request_index.fetch_add(1, Ordering::Relaxed) + 1;
+    let inflight = state.register_validator_inflight.fetch_add(1, Ordering::Relaxed) + 1;
+    state.register_validator_max_inflight.fetch_max(inflight, Ordering::Relaxed);
     state.received_register_validator.fetch_add(1, Ordering::Relaxed);
+    state.received_register_validator_v1.fetch_add(1, Ordering::Relaxed);
     debug!("Received {} registrations", validators.len());
 
-    if let Some(status) = state.response_override.read().unwrap().as_ref() {
-        return (*status).into_response();
+    let validation_error = if state.validate_registrations() {
+        validate_registration_batch(&validators).err()
+    } else {
+        None
+    };
+    if let Some(error_msg) = validation_error.as_ref() {
+        state.registration_validation_failures.fetch_add(1, Ordering::Relaxed);
+        warn!("Rejecting v1 validator registration batch: {error_msg}");
     }
 
-    StatusCode::OK.into_response()
+    let default_status = if validation_error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else if let Some(status) = state.response_override.read().unwrap().as_ref() {
+        *status
+    } else {
+        StatusCode::OK
+    };
+    let status =
+        apply_registration_outcome_script(&state, RegistrationWireVersion::V1, default_status)
+            .await;
+
+    if status.is_success() {
+        persist_registration_batch(&state, &validators, RegistrationWireVersion::V1, None);
+    }
+    record_registration_attempt(&state, request_index, RegistrationWireVersion::V1, status, None);
+
+    state.register_validator_inflight.fetch_sub(1, Ordering::Relaxed);
+
+    status.into_response()
+}
+
+async fn handle_register_validator_v2(
+    State(state): State<Arc<MockRelayState>>,
+    Json(request): Json<RegisterValidatorV2Request>,
+) -> impl IntoResponse {
+    let request_index = state.registration_request_index.fetch_add(1, Ordering::Relaxed) + 1;
+    let inflight = state.register_validator_inflight.fetch_add(1, Ordering::Relaxed) + 1;
+    state.register_validator_max_inflight.fetch_max(inflight, Ordering::Relaxed);
+    state.received_register_validator.fetch_add(1, Ordering::Relaxed);
+    state.received_register_validator_v2.fetch_add(1, Ordering::Relaxed);
+    state
+        .register_validator_v2_idempotency_keys
+        .write()
+        .unwrap()
+        .push(request.context.idempotency_key.clone());
+    debug!("Received {} registrations (v2)", request.registrations.len());
+
+    let validation_error =
+        if state.validate_registrations() && !state.use_not_found_for_register_validator_v2() {
+            validate_registration_batch(&request.registrations)
+                .and_then(|_| validate_v2_context(&request.context))
+                .err()
+        } else {
+            None
+        };
+    if let Some(error_msg) = validation_error.as_ref() {
+        state.registration_validation_failures.fetch_add(1, Ordering::Relaxed);
+        warn!("Rejecting v2 validator registration batch: {error_msg}");
+    }
+
+    let default_status = if state.use_not_found_for_register_validator_v2() {
+        StatusCode::NOT_FOUND
+    } else if validation_error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else if let Some(status) = state.response_override.read().unwrap().as_ref() {
+        *status
+    } else {
+        StatusCode::OK
+    };
+    let status =
+        apply_registration_outcome_script(&state, RegistrationWireVersion::V2, default_status)
+            .await;
+
+    if status.is_success() {
+        persist_registration_batch(
+            &state,
+            &request.registrations,
+            RegistrationWireVersion::V2,
+            Some(&request.context),
+        );
+    }
+    record_registration_attempt(
+        &state,
+        request_index,
+        RegistrationWireVersion::V2,
+        status,
+        Some(request.context.idempotency_key.as_str()),
+    );
+
+    state.register_validator_inflight.fetch_sub(1, Ordering::Relaxed);
+
+    status.into_response()
 }
 
 async fn handle_submit_block_v1(
@@ -222,4 +526,187 @@ async fn handle_submit_block_v2(State(state): State<Arc<MockRelayState>>) -> Res
     }
     state.received_submit_block.fetch_add(1, Ordering::Relaxed);
     (StatusCode::ACCEPTED, "").into_response()
+}
+
+async fn handle_debug_metrics(State(state): State<Arc<MockRelayState>>) -> impl IntoResponse {
+    (StatusCode::OK, Json(state.metrics_snapshot()))
+}
+
+async fn handle_debug_registrations(State(state): State<Arc<MockRelayState>>) -> impl IntoResponse {
+    (StatusCode::OK, Json(state.stored_registrations()))
+}
+
+async fn handle_debug_registration_by_pubkey(
+    State(state): State<Arc<MockRelayState>>,
+    Path(pubkey): Path<String>,
+) -> impl IntoResponse {
+    let key = pubkey.to_ascii_lowercase();
+    if let Some(registration) = state.stored_registration(&key) {
+        (StatusCode::OK, Json(registration)).into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+fn pop_registration_script_outcome(
+    state: &MockRelayState,
+    wire_version: RegistrationWireVersion,
+) -> Option<RegistrationOutcome> {
+    let script = match wire_version {
+        RegistrationWireVersion::V1 => &state.registration_v1_script,
+        RegistrationWireVersion::V2 => &state.registration_v2_script,
+    };
+    script.write().unwrap().pop_front()
+}
+
+async fn apply_registration_outcome_script(
+    state: &MockRelayState,
+    wire_version: RegistrationWireVersion,
+    default_status: StatusCode,
+) -> StatusCode {
+    let mut delay_ms = state.register_validator_delay_ms();
+    let mut scripted_status: Option<StatusCode> = None;
+
+    loop {
+        let Some(outcome) = pop_registration_script_outcome(state, wire_version) else {
+            break;
+        };
+
+        match outcome {
+            RegistrationOutcome::DelayMs(extra) => {
+                delay_ms = delay_ms.saturating_add(extra);
+            }
+            RegistrationOutcome::Ok200 => {
+                scripted_status = Some(StatusCode::OK);
+                break;
+            }
+            RegistrationOutcome::NotFound404 => {
+                scripted_status = Some(StatusCode::NOT_FOUND);
+                break;
+            }
+            RegistrationOutcome::RateLimited429 => {
+                scripted_status = Some(StatusCode::TOO_MANY_REQUESTS);
+                break;
+            }
+            RegistrationOutcome::ServerError500 => {
+                scripted_status = Some(StatusCode::INTERNAL_SERVER_ERROR);
+                break;
+            }
+            RegistrationOutcome::ServerError503 => {
+                scripted_status = Some(StatusCode::SERVICE_UNAVAILABLE);
+                break;
+            }
+        }
+    }
+
+    if delay_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    }
+
+    scripted_status.unwrap_or(default_status)
+}
+
+fn record_registration_attempt(
+    state: &MockRelayState,
+    request_index: u64,
+    wire_version: RegistrationWireVersion,
+    status: StatusCode,
+    idempotency_key: Option<&str>,
+) {
+    let wire_label = match wire_version {
+        RegistrationWireVersion::V1 => "v1",
+        RegistrationWireVersion::V2 => "v2",
+    };
+    let key = format!("{wire_label}:{}", status.as_u16());
+    *state.registration_status_counts.write().unwrap().entry(key).or_default() += 1;
+
+    state.registration_attempt_timeline.write().unwrap().push(RegistrationAttemptRecord {
+        request_index,
+        wire_version,
+        status_code: status.as_u16(),
+        idempotency_key: idempotency_key.map(str::to_string),
+    });
+}
+
+fn persist_registration_batch(
+    state: &MockRelayState,
+    registrations: &[ValidatorRegistration],
+    wire_version: RegistrationWireVersion,
+    context: Option<&RegisterValidatorContext>,
+) {
+    let mut stored = state.stored_registrations.write().unwrap();
+    let now = unix_now_ms();
+    for registration in registrations {
+        let key = registration.message.pubkey.to_string().to_ascii_lowercase();
+        let record = StoredValidatorRegistration {
+            pubkey: key.clone(),
+            registration: registration.clone(),
+            wire_version,
+            idempotency_key: context.map(|ctx| ctx.idempotency_key.clone()),
+            source: context.and_then(|ctx| ctx.source.clone()),
+            mode: context.map(|ctx| match ctx.mode {
+                cb_common::pbs::RegistrationMode::Any => "any".to_string(),
+                cb_common::pbs::RegistrationMode::All => "all".to_string(),
+            }),
+            updated_at_unix_ms: now,
+        };
+        stored.insert(key, record);
+        state.stored_registration_upserts.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn validate_registration_batch(registrations: &[ValidatorRegistration]) -> Result<(), String> {
+    if registrations.is_empty() {
+        return Err("validator registration batch is empty".to_string());
+    }
+
+    for (index, registration) in registrations.iter().enumerate() {
+        if registration.message.fee_recipient == Address::ZERO {
+            return Err(format!("validator registration at index {index} has zero fee_recipient"));
+        }
+        if registration.message.gas_limit == 0 {
+            return Err(format!("validator registration at index {index} has zero gas_limit"));
+        }
+        if registration.message.timestamp == 0 {
+            return Err(format!("validator registration at index {index} has zero timestamp"));
+        }
+        if registration.message.pubkey.is_zero() {
+            return Err(format!("validator registration at index {index} has zero pubkey"));
+        }
+        if registration.signature.is_zero() {
+            return Err(format!("validator registration at index {index} has zero signature"));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_v2_context(context: &RegisterValidatorContext) -> Result<(), String> {
+    let idempotency_key = context.idempotency_key.trim();
+    if idempotency_key.is_empty() {
+        return Err("v2 context idempotency_key is empty".to_string());
+    }
+    if idempotency_key.len() > MAX_IDEMPOTENCY_KEY_LEN {
+        return Err(format!(
+            "v2 context idempotency_key exceeds {MAX_IDEMPOTENCY_KEY_LEN} characters"
+        ));
+    }
+
+    if let Some(source) = context.source.as_deref() {
+        if source.trim().is_empty() {
+            return Err("v2 context source is empty".to_string());
+        }
+        if source.len() > MAX_SOURCE_LEN {
+            return Err(format!("v2 context source exceeds {MAX_SOURCE_LEN} characters"));
+        }
+    }
+
+    Ok(())
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_millis() as u64
 }

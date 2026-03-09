@@ -16,8 +16,8 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use super::{
-    handle_get_header, handle_get_status, handle_register_validator, handle_submit_block_v1,
-    reload::handle_reload,
+    handle_get_header, handle_get_status, handle_register_validator_v1,
+    handle_register_validator_v2, handle_submit_block_v1, reload::handle_reload,
 };
 use crate::{
     MAX_SIZE_REGISTER_VALIDATOR_REQUEST, MAX_SIZE_SUBMIT_BLOCK_RESPONSE,
@@ -35,7 +35,7 @@ pub fn create_app_router<S: BuilderApiState, A: BuilderApi<S>>(state: PbsStateGu
         .route(GET_STATUS_PATH, get(handle_get_status::<S, A>))
         .route(
             REGISTER_VALIDATOR_PATH,
-            post(handle_register_validator::<S, A>)
+            post(handle_register_validator_v1::<S, A>)
                 .route_layer(DefaultBodyLimit::max(MAX_SIZE_REGISTER_VALIDATOR_REQUEST)),
         )
         .route(
@@ -43,11 +43,17 @@ pub fn create_app_router<S: BuilderApiState, A: BuilderApi<S>>(state: PbsStateGu
             post(handle_submit_block_v1::<S, A>)
                 .route_layer(DefaultBodyLimit::max(MAX_SIZE_SUBMIT_BLOCK_RESPONSE)),
         ); // header is smaller than the response but err on the safe side
-    let v2_builder_routes = Router::new().route(
-        SUBMIT_BLOCK_PATH,
-        post(handle_submit_block_v2::<S, A>)
-            .route_layer(DefaultBodyLimit::max(MAX_SIZE_SUBMIT_BLOCK_RESPONSE)),
-    );
+    let v2_builder_routes = Router::new()
+        .route(
+            SUBMIT_BLOCK_PATH,
+            post(handle_submit_block_v2::<S, A>)
+                .route_layer(DefaultBodyLimit::max(MAX_SIZE_SUBMIT_BLOCK_RESPONSE)),
+        )
+        .route(
+            REGISTER_VALIDATOR_PATH,
+            post(handle_register_validator_v2::<S, A>)
+                .route_layer(DefaultBodyLimit::max(MAX_SIZE_REGISTER_VALIDATOR_REQUEST)),
+        );
     let v1_builder_router = Router::new().nest(BUILDER_V1_API_PATH, v1_builder_routes);
     let v2_builder_router = Router::new().nest(BUILDER_V2_API_PATH, v2_builder_routes);
     let reload_router = Router::new().route(RELOAD_PATH, post(handle_reload::<S, A>));

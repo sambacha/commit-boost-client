@@ -117,8 +117,8 @@ async fn submit_block_with_timeout(
             Ok(response) => {
                 // If the original request was for v2 but we had to fall back to v1, return a v2
                 // response
-                if request_api_version == BuilderApiVersion::V1 &&
-                    api_version != request_api_version
+                if request_api_version == BuilderApiVersion::V1
+                    && api_version != request_api_version
                 {
                     return Ok(None);
                 }
@@ -290,12 +290,12 @@ fn validate_unblinded_block(
     fork_name: ForkName,
 ) -> Result<(), PbsError> {
     match fork_name {
-        ForkName::Base |
-        ForkName::Altair |
-        ForkName::Bellatrix |
-        ForkName::Capella |
-        ForkName::Deneb |
-        ForkName::Gloas => Err(PbsError::Validation(ValidationError::UnsupportedFork)),
+        ForkName::Base
+        | ForkName::Altair
+        | ForkName::Bellatrix
+        | ForkName::Capella
+        | ForkName::Deneb
+        | ForkName::Gloas => Err(PbsError::Validation(ValidationError::UnsupportedFork)),
         ForkName::Electra => validate_unblinded_block_electra(
             expected_block_hash,
             got_block_hash,
@@ -324,9 +324,9 @@ fn validate_unblinded_block_electra(
         }));
     }
 
-    if expected_commitments.len() != blobs_bundle.blobs.len() ||
-        expected_commitments.len() != blobs_bundle.commitments.len() ||
-        expected_commitments.len() != blobs_bundle.proofs.len()
+    if expected_commitments.len() != blobs_bundle.blobs.len()
+        || expected_commitments.len() != blobs_bundle.commitments.len()
+        || expected_commitments.len() != blobs_bundle.proofs.len()
     {
         return Err(PbsError::Validation(ValidationError::KzgCommitments {
             expected_blobs: expected_commitments.len(),
@@ -363,9 +363,9 @@ fn validate_unblinded_block_fulu(
         }));
     }
 
-    if expected_commitments.len() != blobs_bundle.blobs.len() ||
-        expected_commitments.len() != blobs_bundle.commitments.len() ||
-        expected_commitments.len() * CELLS_PER_EXT_BLOB != blobs_bundle.proofs.len()
+    if expected_commitments.len() != blobs_bundle.blobs.len()
+        || expected_commitments.len() != blobs_bundle.commitments.len()
+        || expected_commitments.len() * CELLS_PER_EXT_BLOB != blobs_bundle.proofs.len()
     {
         return Err(PbsError::Validation(ValidationError::KzgCommitments {
             expected_blobs: expected_commitments.len(),

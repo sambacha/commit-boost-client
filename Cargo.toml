@@ -55,6 +55,7 @@ notify = "8.2.0"
 parking_lot = "0.12.3"
 pbkdf2 = "0.12.2"
 prometheus = "0.14.0"
+proptest = "1.6.0"
 prost = "0.13.4"
 rand = { version = "0.9", features = ["os_rng"] }
 rayon = "1.10.0"
@@ -81,7 +82,7 @@ tree_hash_derive = "0.9"
 typenum = "1.17.0"
 unicode-normalization = "0.1.24"
 url = { version = "2.5.0", features = ["serde"] }
-uuid = { version = "1.8.0", features = ["fast-rng", "serde", "v4"] }
+uuid = { version = "1.8.0", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [patch.crates-io]
 blstrs_plus = { git = "https://github.com/Commit-Boost/blstrs" }

@@ -418,3 +418,42 @@ async fn start_manager(config: StartSignerConfig) -> eyre::Result<SigningManager
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc, time::Duration};
+
+    use cb_common::types::Chain;
+    use parking_lot::RwLock as ParkingRwLock;
+    use tokio::sync::RwLock;
+
+    use super::SigningState;
+    use crate::manager::{SigningManager, local::LocalSigningManager};
+
+    #[test]
+    fn test_replacing_manager_on_cloned_state_does_not_update_original_state() {
+        let original_manager =
+            SigningManager::Local(LocalSigningManager::new(Chain::Hoodi, None).unwrap());
+        let replacement_manager =
+            SigningManager::Local(LocalSigningManager::new(Chain::Holesky, None).unwrap());
+
+        let original_manager_arc = Arc::new(RwLock::new(original_manager));
+        let replacement_manager_arc = Arc::new(RwLock::new(replacement_manager));
+
+        let state = SigningState {
+            manager: Arc::clone(&original_manager_arc),
+            jwts: Arc::new(HashMap::new()),
+            jwt_auth_failures: Arc::new(ParkingRwLock::new(HashMap::new())),
+            jwt_auth_fail_limit: 1,
+            jwt_auth_fail_timeout: Duration::from_secs(1),
+        };
+
+        let mut cloned_state = state.clone();
+        cloned_state.manager = Arc::clone(&replacement_manager_arc);
+
+        // Reassigning a field on a cloned SigningState does not mutate shared runtime state.
+        assert!(Arc::ptr_eq(&state.manager, &original_manager_arc));
+        assert!(!Arc::ptr_eq(&state.manager, &replacement_manager_arc));
+        assert!(Arc::ptr_eq(&cloned_state.manager, &replacement_manager_arc));
+    }
+}

@@ -1,0 +1,65 @@
+# Stainless SDK generation config for Signer API.
+# Adjust package/module names to match your release/repo conventions.
+
+openapi: api/signer-api.yml
+
+targets:
+  typescript:
+    package_name: "@commit-boost/signer-sdk"
+  go:
+    module_path: "github.com/commit-boost/signer-sdk-go"
+
+authentication:
+  - name: apiKey
+    type: bearer
+    env: SIGNER_API_KEY
+
+client:
+  options:
+    timeout_ms: 30000
+  retries:
+    max_retries: 2
+    strategy: exponential_backoff
+    retry_on:
+      status_codes: [429, 500, 502, 503, 504]
+      connection_errors: true
+
+resources:
+  signer:
+    path_prefix: /signer/v1
+    methods:
+      getPubkeys:
+        operation_id: getPubkeys
+      requestSignature:
+        operation_id: requestSignature
+      generateProxyKey:
+        operation_id: generateProxyKey
+
+  management:
+    methods:
+      status:
+        operation_id: getStatus
+
+models:
+  include:
+    - "#/components/schemas/BlsPubkey"
+    - "#/components/schemas/EcdsaAddress"
+    - "#/components/schemas/BlsSignature"
+    - "#/components/schemas/EcdsaSignature"
+    - "#/components/schemas/ProxyIdentifier"
+    - "#/components/schemas/SignatureResult"
+    - "#/components/schemas/ErrorResponse"
+    - "#/components/schemas/GetPubkeysResponse"
+    - "#/components/schemas/SignerKeyMapping"
+    - "#/components/schemas/RequestSignatureRequest"
+    - "#/components/schemas/GenerateProxyKeyRequest"
+    - "#/components/schemas/GenerateProxyKeyResponse"
+
+pagination:
+  enabled: false
+
+mcp:
+  enabled: false
+
+notes:
+  - "Rust SDK generation is deferred and out of scope for this Stainless-native config."

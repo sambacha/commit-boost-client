@@ -32,6 +32,36 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Registration wire version used per relay
+    pub static ref RELAY_REGISTRATION_WIRE_VERSION: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "relay_registration_wire_version_total",
+            "Registration wire version attempts by relay",
+            &["relay_id", "version"],
+            PBS_METRICS_REGISTRY
+        )
+        .unwrap();
+
+    /// Registration fallback events by relay
+    pub static ref RELAY_REGISTRATION_FALLBACK: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+            "relay_registration_fallback_total",
+            "Registration wire version fallback events by relay",
+            &["relay_id", "from", "to", "reason"],
+            PBS_METRICS_REGISTRY
+        )
+        .unwrap();
+
+    /// Number of active outbound registration requests per relay
+    pub static ref RELAY_REGISTRATION_INFLIGHT: IntGaugeVec =
+        register_int_gauge_vec_with_registry!(
+            "relay_registration_inflight",
+            "Active outbound validator registration requests by relay",
+            &["relay_id"],
+            PBS_METRICS_REGISTRY
+        )
+        .unwrap();
+
     /// Latest slot for which relay delivered a header
     pub static ref RELAY_LAST_SLOT: IntGaugeVec = register_int_gauge_vec_with_registry!(
         "relay_last_slot",

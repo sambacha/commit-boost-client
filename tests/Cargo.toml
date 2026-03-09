@@ -23,6 +23,8 @@ tracing-subscriber.workspace = true
 tracing-test.workspace = true
 tree_hash.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 cb-common = { path = "../crates/common", features = ["testing-flags"] }
+proptest.workspace = true

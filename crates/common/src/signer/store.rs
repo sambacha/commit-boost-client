@@ -198,8 +198,8 @@ impl ProxyStore {
                     let module_path = entry.path();
 
                     // Ensure that the entry is a directory
-                    if module_path.is_dir() &&
-                        let Some(module_id) =
+                    if module_path.is_dir()
+                        && let Some(module_id) =
                             module_path.file_name().and_then(|name| name.to_str())
                     {
                         let module_id = ModuleId(module_id.to_string());
@@ -302,8 +302,8 @@ impl ProxyStore {
                                 let entry = entry?;
                                 let path = entry.path();
 
-                                if !path.is_file() ||
-                                    path.extension().is_none_or(|ext| ext != "json")
+                                if !path.is_file()
+                                    || path.extension().is_none_or(|ext| ext != "json")
                                 {
                                     continue;
                                 }
@@ -376,8 +376,8 @@ impl ProxyStore {
                                 let entry = entry?;
                                 let path = entry.path();
 
-                                if !path.is_file() ||
-                                    path.extension().is_none_or(|ext| ext != "json")
+                                if !path.is_file()
+                                    || path.extension().is_none_or(|ext| ext != "json")
                                 {
                                     continue;
                                 }

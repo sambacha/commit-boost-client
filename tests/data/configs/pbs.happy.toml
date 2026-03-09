@@ -12,6 +12,8 @@ skip_sigverify = false
 timeout_get_header_ms = 950
 timeout_get_payload_ms = 4000
 timeout_register_validator_ms = 3000
+register_validator_max_in_flight = 8
+register_validator_probe_cache = true
 wait_all_registrations = true
 with_signer = false
 
@@ -21,5 +23,6 @@ enable_timing_games = false
 frequency_get_header_ms = 300
 headers = { X-MyCustomHeader = "MyCustomHeader" }
 id = "example-relay"
+registration_api = "auto"
 target_first_request_ms = 200
 url = "http://0xa1cec75a3f0661e99299274182938151e8433c61a19222347ea1313d839229cb4ce4e3e5aa2bdeb71c8fcf1b084963c2@abc.xyz"

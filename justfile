@@ -193,3 +193,11 @@ clean:
 # Runs the suite of tests for all commit-boost crates.
 test:
     cargo test --all-features
+
+# Runs deterministic, low-cost property tests used in PR CI.
+test-prop-fast:
+    PROPTEST_CASES=64 PROPTEST_RNG_SEED=20260305 cargo test -p cb-common -p cb-pbs --all-features prop_
+
+# Runs a deeper deterministic property test sweep for scheduled CI.
+test-prop-heavy:
+    PROPTEST_CASES=1024 PROPTEST_RNG_SEED=20260305 cargo test -p cb-common -p cb-pbs --all-features prop_

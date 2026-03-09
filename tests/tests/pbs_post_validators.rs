@@ -1,7 +1,12 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use alloy::rpc::types::beacon::relay::ValidatorRegistration;
 use cb_common::{
+    config::RegistrationApi,
     signer::random_secret,
     types::{BlsPublicKey, Chain},
 };
@@ -9,7 +14,10 @@ use cb_pbs::{DefaultBuilderApi, PbsService, PbsState};
 use cb_tests::{
     mock_relay::{MockRelayState, start_mock_relay_service},
     mock_validator::MockValidator,
-    utils::{generate_mock_relay, get_pbs_static_config, setup_test_env, to_pbs_config},
+    utils::{
+        generate_mock_relay, generate_mock_relay_with_registration_api, get_pbs_static_config,
+        setup_test_env, to_pbs_config,
+    },
 };
 use eyre::Result;
 use reqwest::StatusCode;
@@ -40,22 +48,12 @@ async fn test_register_validators() -> Result<()> {
     let mock_validator = MockValidator::new(pbs_port)?;
     info!("Sending register validator");
 
-    let registration: ValidatorRegistration = serde_json::from_str(
-        r#"{
-        "message": {
-            "fee_recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "gas_limit": "100000",
-            "timestamp": "1000000",
-            "pubkey": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        },
-        "signature": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }"#,
-    )?;
-
-    let registrations = vec![registration];
+    let registrations = vec![test_registration()?];
     let res = mock_validator.do_register_custom_validators(registrations).await?;
 
     assert_eq!(mock_state.received_register_validator(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
     assert_eq!(res.status(), StatusCode::OK);
 
     Ok(())
@@ -89,19 +87,7 @@ async fn test_register_validators_does_not_retry_on_429() -> Result<()> {
     let mock_validator = MockValidator::new(pbs_port)?;
     info!("Sending register validator to test 429 response");
 
-    let registration: ValidatorRegistration = serde_json::from_str(
-        r#"{
-        "message": {
-            "fee_recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "gas_limit": "100000",
-            "timestamp": "1000000",
-            "pubkey": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        },
-        "signature": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-    }"#,
-    )?;
-
-    let registrations = vec![registration];
+    let registrations = vec![test_registration()?];
     let res = mock_validator.do_register_custom_validators(registrations).await?;
 
     // Should only be called once (no retry)
@@ -110,6 +96,8 @@ async fn test_register_validators_does_not_retry_on_429() -> Result<()> {
     // But it returns `No relay passed register_validator successfully` with 502
     // status code
     assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
 
     Ok(())
 }
@@ -143,7 +131,259 @@ async fn test_register_validators_retries_on_500() -> Result<()> {
     let mock_validator = MockValidator::new(pbs_port)?;
     info!("Sending register validator to test retry on 500");
 
-    let registration: ValidatorRegistration = serde_json::from_str(
+    let registrations = vec![test_registration()?];
+    let _ = mock_validator.do_register_custom_validators(registrations).await;
+
+    // Should retry 3 times (0, 1, 2) → total 3 calls
+    assert_eq!(mock_state.received_register_validator(), 3);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+    assert_eq!(mock_state.received_register_validator_v2(), 3);
+    let idempotency_keys = mock_state.register_validator_v2_idempotency_keys();
+    assert_eq!(idempotency_keys.len(), 3);
+    assert!(idempotency_keys.windows(2).all(|w| w[0] == w[1]));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_falls_back_to_v1_on_v2_404() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4400;
+
+    let mock_state =
+        Arc::new(MockRelayState::new(chain, signer).with_not_found_for_register_validator_v2());
+    let relays = vec![generate_mock_relay(pbs_port + 1, pubkey)?];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+
+    let config = to_pbs_config(chain, get_pbs_static_config(pbs_port), relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 1);
+    assert_eq!(mock_state.received_register_validator(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_auto_caches_v1_after_404() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4450;
+
+    let mock_state =
+        Arc::new(MockRelayState::new(chain, signer).with_not_found_for_register_validator_v2());
+    let relays = vec![generate_mock_relay(pbs_port + 1, pubkey)?];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+
+    let config = to_pbs_config(chain, get_pbs_static_config(pbs_port), relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 1);
+
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 2);
+    assert_eq!(mock_state.received_register_validator(), 3);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_auto_keeps_v2_after_success() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4475;
+
+    let mock_state = Arc::new(MockRelayState::new(chain, signer));
+    let relays = vec![generate_mock_relay(pbs_port + 1, pubkey)?];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+
+    let config = to_pbs_config(chain, get_pbs_static_config(pbs_port), relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 2);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+    assert_eq!(mock_state.received_register_validator(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_v2_pin_does_not_fallback_on_404() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4500;
+
+    let mock_state =
+        Arc::new(MockRelayState::new(chain, signer).with_not_found_for_register_validator_v2());
+    let relays =
+        vec![generate_mock_relay_with_registration_api(pbs_port + 1, pubkey, RegistrationApi::V2)?];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+
+    let config = to_pbs_config(chain, get_pbs_static_config(pbs_port), relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+    assert_eq!(mock_state.received_register_validator(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_respects_total_timeout_budget() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4550;
+    let relay_port = pbs_port + 1;
+
+    // Do not start the relay to force connect errors and retries.
+    let relays = vec![generate_mock_relay(relay_port, pubkey)?];
+    let mut pbs_config = get_pbs_static_config(pbs_port);
+    pbs_config.timeout_register_validator_ms = 250;
+    pbs_config.register_validator_retry_limit = 5;
+
+    let config = to_pbs_config(chain, pbs_config, relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let start = Instant::now();
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    let elapsed = start.elapsed();
+
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "expected request to stay within timeout budget, elapsed={elapsed:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_limits_inflight_requests() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4575;
+
+    let mock_state =
+        Arc::new(MockRelayState::new(chain, signer).with_register_validator_delay_ms(150));
+    let relays = vec![
+        generate_mock_relay(pbs_port + 1, pubkey.clone())?,
+        generate_mock_relay(pbs_port + 2, pubkey.clone())?,
+        generate_mock_relay(pbs_port + 3, pubkey.clone())?,
+        generate_mock_relay(pbs_port + 4, pubkey)?,
+    ];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 2));
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 3));
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 4));
+
+    let mut pbs_config = get_pbs_static_config(pbs_port);
+    pbs_config.register_validator_max_in_flight = 2;
+    let config = to_pbs_config(chain, pbs_config, relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators(vec![test_registration()?]).await?;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 4);
+    assert!(
+        mock_state.max_register_validator_inflight() <= 2,
+        "observed max inflight registrations: {}",
+        mock_state.max_register_validator_inflight()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_register_validators_v2_inbound_route() -> Result<()> {
+    setup_test_env();
+    let signer = random_secret();
+    let pubkey: BlsPublicKey = signer.public_key();
+
+    let chain = Chain::Holesky;
+    let pbs_port = 4600;
+
+    let mock_state = Arc::new(MockRelayState::new(chain, signer));
+    let relays = vec![generate_mock_relay(pbs_port + 1, pubkey)?];
+    tokio::spawn(start_mock_relay_service(mock_state.clone(), pbs_port + 1));
+
+    let config = to_pbs_config(chain, get_pbs_static_config(pbs_port), relays);
+    let state = PbsState::new(config, PathBuf::new());
+    tokio::spawn(PbsService::run::<(), DefaultBuilderApi>(state));
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let mock_validator = MockValidator::new(pbs_port)?;
+    let res = mock_validator.do_register_custom_validators_v2(vec![test_registration()?]).await?;
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(mock_state.received_register_validator_v2(), 1);
+    assert_eq!(mock_state.received_register_validator_v1(), 0);
+
+    Ok(())
+}
+
+fn test_registration() -> Result<ValidatorRegistration> {
+    Ok(serde_json::from_str(
         r#"{
         "message": {
             "fee_recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -153,13 +393,5 @@ async fn test_register_validators_retries_on_500() -> Result<()> {
         },
         "signature": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }"#,
-    )?;
-
-    let registrations = vec![registration];
-    let _ = mock_validator.do_register_custom_validators(registrations).await;
-
-    // Should retry 3 times (0, 1, 2) → total 3 calls
-    assert_eq!(mock_state.received_register_validator(), 3);
-
-    Ok(())
+    )?)
 }
