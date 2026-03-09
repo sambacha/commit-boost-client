@@ -3,6 +3,9 @@ name: CI
 on:
   pull_request:
     branches: ["**"]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -10,6 +13,7 @@ env:
 jobs:
   lint:
     name: lint
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
@@ -48,3 +52,38 @@ jobs:
 
       - name: Run tests
         run: just test
+
+      - name: Run fast property tests
+        run: just test-prop-fast
+
+  property-heavy:
+    name: property-heavy
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-06-26
+
+      - name: Install protoc
+        run: sudo provisioning/protoc.sh
+
+      - name: Setup just
+        uses: extractions/setup-just@v3
+        with:
+          just-version: 1.40.0
+
+      - name: Run heavy property tests
+        run: just test-prop-heavy

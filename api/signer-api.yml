@@ -9,6 +9,7 @@ tags:
 paths:
   /signer/v1/get_pubkeys:
     get:
+      operationId: getPubkeys
       summary: Get a list of public keys for which signatures may be requested
       tags:
         - Signer
@@ -20,46 +21,15 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  keys:
-                    description: List of mappings between consensus pubkeys and their proxies
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        consensus:
-                          description: Consensus validator pubkey
-                          $ref: "#/components/schemas/BlsPubkey"
-                        proxy_bls:
-                          description: BLS proxy pubkeys
-                          type: array
-                          items:
-                            $ref: "#/components/schemas/BlsPubkey"
-                        proxy_ecdsa:
-                          description: ECDSA proxy addresses
-                          type: array
-                          items:
-                            $ref: "#/components/schemas/EcdsaAddress"
+                $ref: "#/components/schemas/GetPubkeysResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - code
-                  - message
-                properties:
-                  code:
-                    type: number
-                    example: 500
-                  message:
-                    type: string
-                    example: "Internal error"
+          $ref: "#/components/responses/InternalError"
 
   /signer/v1/request_signature:
     post:
+      operationId: requestSignature
       summary: Send a signature request
       tags:
         - Signer
@@ -70,30 +40,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [type, object_root]
-              oneOf:
-                - required: [pubkey]
-                - required: [proxy]
-              properties:
-                type:
-                  description: Type of the sign request
-                  type: string
-                  enum: [consensus, proxy_bls, proxy_ecdsa]
-                pubkey:
-                  description: Public key of the validator for consensus signatures
-                  $ref: "#/components/schemas/BlsPubkey"
-                proxy:
-                  description: BLS proxy pubkey or ECDSA address for proxy signatures
-                  oneOf:
-                    - $ref: "#/components/schemas/BlsPubkey"
-                    - $ref: "#/components/schemas/EcdsaAddress"
-                object_root:
-                  description: The root of the object to be signed
-                  type: string
-                  format: hex
-                  pattern: "^0x[a-fA-F0-9]{64}$"
-                  example: "0x3e9f4a78b5c21d64f0b8e3d9a7f5c02b4d1e67a3c8f29b5d6e4a3b1c8f72e6d9"
+              $ref: "#/components/schemas/RequestSignatureRequest"
             examples:
               Consensus:
                 value:
@@ -116,9 +63,7 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: "#/components/schemas/BlsSignature"
-                  - $ref: "#/components/schemas/EcdsaSignature"
+                $ref: "#/components/schemas/SignatureResult"
               examples:
                 Consensus:
                   value: "0xa3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989a3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989"
@@ -126,41 +71,16 @@ paths:
                   value: "0xa3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989a3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989"
                 ProxyEcdsa:
                   value: "0x985b495f49d1b96db3bba3f6c5dd1810950317c10d4c2042bd316f338cdbe74359072e209b85e56ac492092d7860063dd096ca31b4e164ef27e3f8d508e656801c"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "404":
-          description: Unknown value (pubkey, etc.)
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - code
-                  - message
-                properties:
-                  code:
-                    type: number
-                    example: 404
-                  message:
-                    type: string
-                    example: "Unknown pubkey"
+          $ref: "#/components/responses/NotFoundError"
         "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - code
-                  - message
-                properties:
-                  code:
-                    type: number
-                    example: 500
-                  message:
-                    type: string
-                    example: "Internal error"
+          $ref: "#/components/responses/InternalError"
 
   /signer/v1/generate_proxy_key:
     post:
+      operationId: generateProxyKey
       summary: Request a proxy key be generated for a specific consensus pubkey
       tags:
         - Signer
@@ -171,17 +91,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [pubkey, scheme]
-              properties:
-                pubkey:
-                  description: a validator BLS public key for which to generate a proxy key
-                  allOf:
-                    - $ref: "#/components/schemas/BlsPubkey"
-                scheme:
-                  description: signature scheme to generate proxy keypair for
-                  type: string
-                  enum: [bls, ecdsa]
+              $ref: "#/components/schemas/GenerateProxyKeyRequest"
             examples:
               Bls:
                 value:
@@ -197,24 +107,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: object
-                    properties:
-                      delegator:
-                        description: the validator BLS public key for which the proxy key was generated (the same one as requested)
-                        allOf:
-                          - $ref: "#/components/schemas/BlsPubkey"
-                      proxy:
-                        description: the generated proxy identifier (BLS pubkey or ECDSA address)
-                        oneOf:
-                          - $ref: "#/components/schemas/BlsPubkey"
-                          - $ref: "#/components/schemas/EcdsaAddress"
-                  signature:
-                    description: The signature of the proxy delegation
-                    allOf:
-                      - $ref: "#/components/schemas/BlsSignature"
+                $ref: "#/components/schemas/GenerateProxyKeyResponse"
               examples:
                 Bls:
                   value:
@@ -228,41 +121,16 @@ paths:
                       delegator: "0xa9e9cff900de07e295a044789fd4bdb6785eb0651ad282f9e76d12afd87e75180bdd64caf2e315b815d7322bd31ab48a"
                       proxy: "0x71f65e9f6336770e22d148bd5e89b391a1c3b0bb"
                     signature: "0xb5b5b71d1701cc45086af3d3d86bf9d3c509442835e5b9f7734923edc9a6c538e743d70613cdef90b7e5b171fbbe6a29075b3f155e4bd66d81ff9dbc3b6d7fa677d169b2ceab727ffa079a31fe1fc0e478752e9da9566a9408e4db24ac6104db"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
         "404":
-          description: Unknown value (pubkey, etc.)
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - code
-                  - message
-                properties:
-                  code:
-                    type: number
-                    example: 404
-                  message:
-                    type: string
-                    example: "Unknown pubkey"
+          $ref: "#/components/responses/NotFoundError"
         "500":
-          description: Internal error
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                  - code
-                  - message
-                properties:
-                  code:
-                    type: number
-                    example: 500
-                  message:
-                    type: string
-                    example: "Internal error"
+          $ref: "#/components/responses/InternalError"
 
   /status:
     get:
+      operationId: getStatus
       summary: Get the status of the Signer API module
       tags:
         - Management
@@ -281,24 +149,184 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  responses:
+    UnauthorizedError:
+      description: Unauthorized request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: 401
+            message: "Unauthorized"
+    NotFoundError:
+      description: Unknown value (pubkey, proxy, etc.)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: 404
+            message: "Unknown pubkey"
+    InternalError:
+      description: Internal error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            code: 500
+            message: "Internal error"
   schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: integer
+          example: 500
+        message:
+          type: string
+          example: "Internal error"
+
     BlsPubkey:
       type: string
       format: hex
       pattern: "^0x[a-fA-F0-9]{96}$"
       example: "0xa9e9cff900de07e295a044789fd4bdb6785eb0651ad282f9e76d12afd87e75180bdd64caf2e315b815d7322bd31ab48a"
+
     EcdsaAddress:
       type: string
       format: hex
       pattern: "^0x[a-fA-F0-9]{40}$"
       example: "0x71f65e9f6336770e22d148bd5e89b391a1c3b0bb"
+
     BlsSignature:
       type: string
       format: hex
       pattern: "^0x[a-fA-F0-9]{192}$"
       example: "0xa3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989a3ffa9241f78279f1af04644cb8c79c2d8f02bcf0e28e2f186f6dcccac0a869c2be441fda50f0dea895cfce2e53f0989"
+
     EcdsaSignature:
       type: string
       format: hex
       pattern: "^0x[a-fA-F0-9]{130}$"
       example: "0x985b495f49d1b96db3bba3f6c5dd1810950317c10d4c2042bd316f338cdbe74359072e209b85e56ac492092d7860063dd096ca31b4e164ef27e3f8d508e656801c"
+
+    ProxyIdentifier:
+      oneOf:
+        - $ref: "#/components/schemas/BlsPubkey"
+        - $ref: "#/components/schemas/EcdsaAddress"
+
+    SignatureResult:
+      oneOf:
+        - $ref: "#/components/schemas/BlsSignature"
+        - $ref: "#/components/schemas/EcdsaSignature"
+
+    SignerKeyMapping:
+      type: object
+      required:
+        - consensus
+        - proxy_bls
+        - proxy_ecdsa
+      properties:
+        consensus:
+          description: Consensus validator pubkey
+          allOf:
+            - $ref: "#/components/schemas/BlsPubkey"
+        proxy_bls:
+          description: BLS proxy pubkeys
+          type: array
+          items:
+            $ref: "#/components/schemas/BlsPubkey"
+        proxy_ecdsa:
+          description: ECDSA proxy addresses
+          type: array
+          items:
+            $ref: "#/components/schemas/EcdsaAddress"
+
+    GetPubkeysResponse:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          description: List of mappings between consensus pubkeys and their proxies
+          type: array
+          items:
+            $ref: "#/components/schemas/SignerKeyMapping"
+
+    RequestSignatureRequest:
+      type: object
+      required:
+        - type
+        - object_root
+      oneOf:
+        - required:
+            - pubkey
+        - required:
+            - proxy
+      properties:
+        type:
+          description: Type of the sign request
+          type: string
+          enum: [consensus, proxy_bls, proxy_ecdsa]
+        pubkey:
+          description: Public key of the validator for consensus signatures
+          allOf:
+            - $ref: "#/components/schemas/BlsPubkey"
+        proxy:
+          description: BLS proxy pubkey or ECDSA address for proxy signatures
+          allOf:
+            - $ref: "#/components/schemas/ProxyIdentifier"
+        object_root:
+          description: The root of the object to be signed
+          type: string
+          format: hex
+          pattern: "^0x[a-fA-F0-9]{64}$"
+          example: "0x3e9f4a78b5c21d64f0b8e3d9a7f5c02b4d1e67a3c8f29b5d6e4a3b1c8f72e6d9"
+
+    GenerateProxyKeyRequest:
+      type: object
+      required:
+        - pubkey
+        - scheme
+      properties:
+        pubkey:
+          description: Validator BLS public key for which to generate a proxy key
+          allOf:
+            - $ref: "#/components/schemas/BlsPubkey"
+        scheme:
+          description: Signature scheme to generate proxy keypair for
+          type: string
+          enum: [bls, ecdsa]
+
+    ProxyDelegationMessage:
+      type: object
+      required:
+        - delegator
+        - proxy
+      properties:
+        delegator:
+          description: Validator BLS pubkey for which the proxy key was generated
+          allOf:
+            - $ref: "#/components/schemas/BlsPubkey"
+        proxy:
+          description: Generated proxy identifier (BLS pubkey or ECDSA address)
+          allOf:
+            - $ref: "#/components/schemas/ProxyIdentifier"
+
+    GenerateProxyKeyResponse:
+      type: object
+      required:
+        - message
+        - signature
+      properties:
+        message:
+          $ref: "#/components/schemas/ProxyDelegationMessage"
+        signature:
+          description: Signature of the proxy delegation
+          allOf:
+            - $ref: "#/components/schemas/BlsSignature"

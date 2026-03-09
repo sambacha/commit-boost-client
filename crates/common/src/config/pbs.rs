@@ -170,8 +170,7 @@ pub struct PbsConfig {
 }
 
 impl PbsConfig {
-    /// Validate PBS config parameters
-    pub async fn validate(&self, chain: Chain) -> Result<()> {
+    fn validate_local_invariants(&self) -> Result<()> {
         // timeouts must be positive
         ensure!(self.timeout_get_header_ms > 0, "timeout_get_header_ms must be greater than 0");
         ensure!(self.timeout_get_payload_ms > 0, "timeout_get_payload_ms must be greater than 0");
@@ -206,6 +205,18 @@ impl PbsConfig {
             );
         }
 
+        ensure!(
+            self.mux_registry_refresh_interval_seconds > 0,
+            "registry mux refreshing interval must be greater than 0"
+        );
+
+        Ok(())
+    }
+
+    /// Validate PBS config parameters
+    pub async fn validate(&self, chain: Chain) -> Result<()> {
+        self.validate_local_invariants()?;
+
         if let Some(rpc_url) = &self.rpc_url {
             // TODO: remove this once we support chain ids for custom chains
             if !matches!(chain, Chain::Custom { .. }) {
@@ -220,12 +231,6 @@ impl PbsConfig {
                 );
             }
         }
-
-        ensure!(
-            self.mux_registry_refresh_interval_seconds > 0,
-            "registry mux refreshing interval must be greater than 0"
-        );
-
         Ok(())
     }
 }
@@ -446,4 +451,110 @@ fn default_ssv_node_api_url() -> Url {
 /// Default URL for the public SSV network API.
 fn default_public_ssv_api_url() -> Url {
     Url::parse("https://api.ssv.network/api/v4/").expect("default URL is valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use alloy::primitives::U256;
+    use proptest::prelude::*;
+    use url::Url;
+
+    use super::PbsConfig;
+    use crate::{
+        config::HTTP_TIMEOUT_SECONDS_DEFAULT,
+        pbs::{DEFAULT_PBS_PORT, DEFAULT_REGISTRY_REFRESH_SECONDS, DefaultTimeout},
+        utils::WEI_PER_ETH,
+    };
+
+    fn valid_config() -> PbsConfig {
+        PbsConfig {
+            host: Ipv4Addr::UNSPECIFIED,
+            port: DEFAULT_PBS_PORT,
+            relay_check: true,
+            wait_all_registrations: true,
+            timeout_get_header_ms: DefaultTimeout::GET_HEADER_MS,
+            timeout_get_payload_ms: DefaultTimeout::GET_PAYLOAD_MS,
+            timeout_register_validator_ms: DefaultTimeout::REGISTER_VALIDATOR_MS,
+            skip_sigverify: false,
+            min_bid_wei: U256::ZERO,
+            late_in_slot_time_ms: 3000,
+            extra_validation_enabled: false,
+            rpc_url: None,
+            ssv_node_api_url: Url::parse("http://localhost:16000/v1/").unwrap(),
+            ssv_public_api_url: Url::parse("https://api.ssv.network/api/v4/").unwrap(),
+            http_timeout_seconds: HTTP_TIMEOUT_SECONDS_DEFAULT,
+            register_validator_retry_limit: 3,
+            register_validator_max_in_flight: 8,
+            register_validator_probe_cache: true,
+            validator_registration_batch_size: None,
+            mux_registry_refresh_interval_seconds: DEFAULT_REGISTRY_REFRESH_SECONDS,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_timeout_get_header_must_be_less_than_late_slot(
+            late_in_slot_time_ms in 1u64..10_000,
+            delta in 0u64..10_000
+        ) {
+            let mut cfg = valid_config();
+            cfg.late_in_slot_time_ms = late_in_slot_time_ms;
+            cfg.timeout_get_header_ms = late_in_slot_time_ms.saturating_add(delta);
+
+            prop_assert!(cfg.validate_local_invariants().is_err());
+        }
+
+        #[test]
+        fn prop_retry_limit_zero_fails(_dummy in Just(())) {
+            let mut cfg = valid_config();
+            cfg.register_validator_retry_limit = 0;
+
+            prop_assert!(cfg.validate_local_invariants().is_err());
+        }
+
+        #[test]
+        fn prop_max_in_flight_zero_fails(_dummy in Just(())) {
+            let mut cfg = valid_config();
+            cfg.register_validator_max_in_flight = 0;
+
+            prop_assert!(cfg.validate_local_invariants().is_err());
+        }
+
+        #[test]
+        fn prop_extra_validation_requires_rpc_url(_dummy in Just(())) {
+            let mut cfg = valid_config();
+            cfg.extra_validation_enabled = true;
+            cfg.rpc_url = None;
+
+            prop_assert!(cfg.validate_local_invariants().is_err());
+        }
+
+        #[test]
+        fn prop_valid_local_constraints_pass(
+            timeout_get_header_ms in 1u64..5_000,
+            timeout_get_payload_ms in 1u64..10_000,
+            timeout_register_validator_ms in 1u64..10_000,
+            late_delta in 1u64..10_000,
+            min_bid_wei in 0u128..u128::from(WEI_PER_ETH),
+            retry_limit in 1u32..20,
+            max_in_flight in 1u32..64,
+            mux_refresh_seconds in 1u64..10_000
+        ) {
+            let mut cfg = valid_config();
+            cfg.timeout_get_header_ms = timeout_get_header_ms;
+            cfg.timeout_get_payload_ms = timeout_get_payload_ms;
+            cfg.timeout_register_validator_ms = timeout_register_validator_ms;
+            cfg.late_in_slot_time_ms = timeout_get_header_ms.saturating_add(late_delta);
+            cfg.min_bid_wei = U256::from(min_bid_wei);
+            cfg.register_validator_retry_limit = retry_limit;
+            cfg.register_validator_max_in_flight = max_in_flight;
+            cfg.mux_registry_refresh_interval_seconds = mux_refresh_seconds;
+            cfg.extra_validation_enabled = false;
+            cfg.rpc_url = None;
+
+            prop_assert!(cfg.validate_local_invariants().is_ok());
+        }
+    }
 }

@@ -55,6 +55,7 @@ notify = "8.2.0"
 parking_lot = "0.12.3"
 pbkdf2 = "0.12.2"
 prometheus = "0.14.0"
+proptest = "1.6.0"
 prost = "0.13.4"
 rand = { version = "0.9", features = ["os_rng"] }
 rayon = "1.10.0"

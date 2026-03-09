@@ -1,0 +1,239 @@
+openapi: 3.1.0
+info:
+  title: Commit-Boost Greenfield API
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:18550
+paths:
+  /eth/v1/builder/status:
+    get:
+      operationId: getBuilderStatus
+      responses:
+        '200':
+          description: At least one relay is healthy.
+        '502':
+          description: No relay succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}:
+    get:
+      operationId: getHeader
+      parameters:
+        - in: path
+          name: slot
+          required: true
+          schema:
+            type: integer
+            minimum: 0
+        - in: path
+          name: parent_hash
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: pubkey
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Header bid found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeaderBid'
+        '204':
+          description: No valid header bid.
+  /eth/v1/builder/validators:
+    post:
+      operationId: registerValidatorsV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/ValidatorRegistration'
+      responses:
+        '200':
+          description: At least one relay accepted registration.
+  /eth/v2/builder/validators:
+    post:
+      operationId: registerValidatorsV2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterValidatorV2Request'
+      responses:
+        '200':
+          description: At least one relay accepted registration.
+  /eth/v1/builder/blinded_blocks:
+    post:
+      operationId: submitBlindedBlockV1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Accepted by at least one relay.
+  /eth/v2/builder/blinded_blocks:
+    post:
+      operationId: submitBlindedBlockV2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Accepted by at least one relay.
+  /signer/v1/get_pubkeys:
+    get:
+      operationId: getSignerPubkeys
+      responses:
+        '200':
+          description: Public keys available.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+  /signer/v1/request_signature:
+    post:
+      operationId: requestSignature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignatureRequest'
+      responses:
+        '200':
+          description: Signature generated.
+          content:
+            application/json:
+              schema:
+                type: string
+  /signer/v1/generate_proxy_key:
+    post:
+      operationId: generateProxyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyKeyRequest'
+      responses:
+        '200':
+          description: Proxy delegation generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyKeyResponse'
+  /status:
+    get:
+      operationId: getManagementStatus
+      responses:
+        '200':
+          description: Service status.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+    ValidatorRegistration:
+      type: object
+      required: [pubkey, fee_recipient, gas_limit, timestamp, signature]
+      properties:
+        pubkey:
+          type: string
+        fee_recipient:
+          type: string
+        gas_limit:
+          type: integer
+        timestamp:
+          type: integer
+        signature:
+          type: string
+    RegisterValidatorContext:
+      type: object
+      required: [idempotency_key, mode]
+      properties:
+        idempotency_key:
+          type: string
+        source:
+          type: string
+          nullable: true
+        mode:
+          type: string
+          enum: [any, all]
+    RegisterValidatorV2Request:
+      type: object
+      required: [registrations, context]
+      properties:
+        registrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidatorRegistration'
+        context:
+          $ref: '#/components/schemas/RegisterValidatorContext'
+    HeaderBid:
+      type: object
+      required: [block_hash, parent_hash, tx_root, value, timestamp]
+      properties:
+        block_hash:
+          type: string
+        parent_hash:
+          type: string
+        tx_root:
+          type: string
+        value:
+          type: integer
+        timestamp:
+          type: integer
+    SignatureRequest:
+      type: object
+      required: [pubkey, payload_root, mode]
+      properties:
+        pubkey:
+          type: string
+        payload_root:
+          type: string
+        mode:
+          type: string
+    ProxyKeyRequest:
+      type: object
+      required: [pubkey, delegatee]
+      properties:
+        pubkey:
+          type: string
+        delegatee:
+          type: string
+    ProxyKeyResponse:
+      type: object
+      required: [delegation, signature]
+      properties:
+        delegation:
+          type: string
+        signature:
+          type: string

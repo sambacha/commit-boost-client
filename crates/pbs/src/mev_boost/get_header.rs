@@ -571,6 +571,7 @@ mod tests {
         types::{BlsSecretKey, Chain},
         utils::{TestRandomSeed, timestamp_of_slot_start_sec},
     };
+    use proptest::prelude::*;
 
     use super::{validate_header_data, *};
 
@@ -671,5 +672,159 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    fn chain_strategy() -> impl Strategy<Value = Chain> {
+        prop_oneof![
+            Just(Chain::Mainnet),
+            Just(Chain::Holesky),
+            Just(Chain::Sepolia),
+            Just(Chain::Hoodi),
+        ]
+    }
+
+    fn non_zero_hash_strategy() -> impl Strategy<Value = B256> {
+        any::<[u8; 32]>().prop_map(|mut bytes| {
+            if bytes.iter().all(|byte| *byte == 0) {
+                bytes[0] = 1;
+            }
+            B256::from(bytes)
+        })
+    }
+
+    fn non_empty_tx_root_strategy() -> impl Strategy<Value = B256> {
+        any::<[u8; 32]>().prop_map(|mut bytes| {
+            if bytes.iter().all(|byte| *byte == 0) {
+                bytes[0] = 1;
+            }
+
+            let mut root = B256::from(bytes);
+            if root == EMPTY_TX_ROOT_HASH {
+                bytes[0] ^= 1;
+                if bytes.iter().all(|byte| *byte == 0) {
+                    bytes[0] = 1;
+                }
+                root = B256::from(bytes);
+            }
+
+            root
+        })
+    }
+
+    fn valid_header_data(
+        chain: Chain,
+        slot: u64,
+        block_hash: B256,
+        parent_hash: B256,
+        tx_root: B256,
+        value: U256,
+    ) -> HeaderData {
+        HeaderData {
+            block_hash,
+            parent_hash,
+            tx_root,
+            value,
+            timestamp: timestamp_of_slot_start_sec(slot, chain),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_validate_header_data_accepts_valid_inputs(
+            chain in chain_strategy(),
+            slot in 0u64..1_000_000_000,
+            block_hash in non_zero_hash_strategy(),
+            parent_hash in non_zero_hash_strategy(),
+            tx_root in non_empty_tx_root_strategy(),
+            min_bid in 0u64..1_000_000,
+            bid_delta in 0u64..1_000_000,
+        ) {
+            let minimum_bid_wei = U256::from(min_bid);
+            let value = minimum_bid_wei + U256::from(bid_delta);
+            let header_data =
+                valid_header_data(chain, slot, block_hash, parent_hash, tx_root, value);
+
+            prop_assert!(
+                validate_header_data(&header_data, chain, parent_hash, minimum_bid_wei, slot).is_ok()
+            );
+        }
+
+        #[test]
+        fn prop_validate_header_data_single_broken_invariant_maps_to_expected_error(
+            chain in chain_strategy(),
+            slot in 0u64..1_000_000_000,
+            block_hash in non_zero_hash_strategy(),
+            parent_hash in non_zero_hash_strategy(),
+            tx_root in non_empty_tx_root_strategy(),
+            min_bid in 1u64..1_000_000,
+            bid_delta in 0u64..1_000_000,
+            broken_invariant in 0u8..5,
+        ) {
+            let minimum_bid_wei = U256::from(min_bid);
+            let value = minimum_bid_wei + U256::from(bid_delta);
+            let mut header_data =
+                valid_header_data(chain, slot, block_hash, parent_hash, tx_root, value);
+
+            let expected_error = match broken_invariant {
+                0 => {
+                    header_data.block_hash = B256::ZERO;
+                    ValidationError::EmptyBlockhash
+                }
+                1 => {
+                    let mut mismatched_parent = parent_hash;
+                    mismatched_parent.0[0] ^= 1;
+                    header_data.parent_hash = mismatched_parent;
+                    ValidationError::ParentHashMismatch {
+                        expected: parent_hash,
+                        got: mismatched_parent,
+                    }
+                }
+                2 => {
+                    header_data.tx_root = EMPTY_TX_ROOT_HASH;
+                    ValidationError::EmptyTxRoot
+                }
+                3 => {
+                    let below_min = minimum_bid_wei - U256::from(1_u64);
+                    header_data.value = below_min;
+                    ValidationError::BidTooLow { min: minimum_bid_wei, got: below_min }
+                }
+                _ => {
+                    let expected_timestamp = timestamp_of_slot_start_sec(slot, chain);
+                    let wrong_timestamp = expected_timestamp.saturating_add(1);
+                    header_data.timestamp = wrong_timestamp;
+                    ValidationError::TimestampMismatch {
+                        expected: expected_timestamp,
+                        got: wrong_timestamp,
+                    }
+                }
+            };
+
+            prop_assert_eq!(
+                validate_header_data(&header_data, chain, parent_hash, minimum_bid_wei, slot),
+                Err(expected_error)
+            );
+        }
+
+        #[test]
+        fn prop_validate_header_data_bid_threshold_monotonicity(
+            chain in chain_strategy(),
+            slot in 0u64..1_000_000_000,
+            block_hash in non_zero_hash_strategy(),
+            parent_hash in non_zero_hash_strategy(),
+            tx_root in non_empty_tx_root_strategy(),
+            bid_value in 1u64..1_000_000,
+            min_bid_delta in 1u64..1_000_000,
+        ) {
+            let value = U256::from(bid_value);
+            let header_data = valid_header_data(chain, slot, block_hash, parent_hash, tx_root, value);
+
+            prop_assert!(validate_header_data(&header_data, chain, parent_hash, value, slot).is_ok());
+
+            let raised_min_bid = value + U256::from(min_bid_delta);
+            prop_assert_eq!(
+                validate_header_data(&header_data, chain, parent_hash, raised_min_bid, slot),
+                Err(ValidationError::BidTooLow { min: raised_min_bid, got: value })
+            );
+        }
     }
 }

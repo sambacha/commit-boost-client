@@ -353,7 +353,19 @@ fn initial_registration_api_version(
     relay: &RelayClient,
     probe_cache_enabled: bool,
 ) -> BuilderApiVersion {
-    match relay.config.registration_api {
+    decide_registration_api_version(
+        relay.config.registration_api,
+        relay.registration_capability(),
+        probe_cache_enabled,
+    )
+}
+
+fn decide_registration_api_version(
+    registration_api: RegistrationApi,
+    capability: RelayRegistrationCapability,
+    probe_cache_enabled: bool,
+) -> BuilderApiVersion {
+    match registration_api {
         RegistrationApi::V1 => BuilderApiVersion::V1,
         RegistrationApi::V2 => BuilderApiVersion::V2,
         RegistrationApi::Auto => {
@@ -361,7 +373,7 @@ fn initial_registration_api_version(
                 return BuilderApiVersion::V2;
             }
 
-            match relay.registration_capability() {
+            match capability {
                 RelayRegistrationCapability::V1Only => BuilderApiVersion::V1,
                 RelayRegistrationCapability::Unknown | RelayRegistrationCapability::V2Supported => {
                     BuilderApiVersion::V2
@@ -374,9 +386,12 @@ fn initial_registration_api_version(
 #[cfg(test)]
 mod tests {
     use alloy::rpc::types::beacon::relay::ValidatorRegistration;
+    use cb_common::{config::RegistrationApi, pbs::RelayRegistrationCapability};
+    use proptest::prelude::*;
 
     use super::{
         BuilderApiVersion, RegisterValidatorContext, RegistrationBatchPayload, RegistrationMode,
+        decide_registration_api_version,
     };
 
     #[test]
@@ -415,5 +430,77 @@ mod tests {
         }"#,
         )
         .unwrap()
+    }
+
+    fn relay_capability_strategy() -> impl Strategy<Value = RelayRegistrationCapability> {
+        prop_oneof![
+            Just(RelayRegistrationCapability::Unknown),
+            Just(RelayRegistrationCapability::V1Only),
+            Just(RelayRegistrationCapability::V2Supported),
+        ]
+    }
+
+    fn registration_api_strategy() -> impl Strategy<Value = RegistrationApi> {
+        prop_oneof![
+            Just(RegistrationApi::Auto),
+            Just(RegistrationApi::V1),
+            Just(RegistrationApi::V2),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn prop_initial_registration_api_version_v1_pin_is_absolute(
+            capability in relay_capability_strategy(),
+            probe_cache_enabled in any::<bool>(),
+        ) {
+            let selected =
+                decide_registration_api_version(RegistrationApi::V1, capability, probe_cache_enabled);
+            prop_assert_eq!(selected, BuilderApiVersion::V1);
+        }
+
+        #[test]
+        fn prop_initial_registration_api_version_v2_pin_is_absolute(
+            capability in relay_capability_strategy(),
+            probe_cache_enabled in any::<bool>(),
+        ) {
+            let selected =
+                decide_registration_api_version(RegistrationApi::V2, capability, probe_cache_enabled);
+            prop_assert_eq!(selected, BuilderApiVersion::V2);
+        }
+
+        #[test]
+        fn prop_initial_registration_api_version_auto_without_probe_cache_is_v2(
+            capability in relay_capability_strategy(),
+        ) {
+            let selected = decide_registration_api_version(RegistrationApi::Auto, capability, false);
+            prop_assert_eq!(selected, BuilderApiVersion::V2);
+        }
+
+        #[test]
+        fn prop_initial_registration_api_version_auto_with_probe_cache_uses_capability(
+            capability in relay_capability_strategy(),
+        ) {
+            let selected = decide_registration_api_version(RegistrationApi::Auto, capability, true);
+            let expected = if matches!(capability, RelayRegistrationCapability::V1Only) {
+                BuilderApiVersion::V1
+            } else {
+                BuilderApiVersion::V2
+            };
+            prop_assert_eq!(selected, expected);
+        }
+
+        #[test]
+        fn prop_initial_registration_api_version_is_deterministic(
+            registration_api in registration_api_strategy(),
+            capability in relay_capability_strategy(),
+            probe_cache_enabled in any::<bool>(),
+        ) {
+            let first =
+                decide_registration_api_version(registration_api, capability, probe_cache_enabled);
+            let second =
+                decide_registration_api_version(registration_api, capability, probe_cache_enabled);
+            prop_assert_eq!(first, second);
+        }
     }
 }
